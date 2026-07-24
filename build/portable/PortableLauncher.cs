@@ -9,7 +9,7 @@ namespace BlackHoleRecycleBinPortable
 {
     internal static class PortableLauncher
     {
-        private const string AppVersion = "1.0.0";
+        private const string AppVersion = "1.0.2";
         private const string AppExecutable = "Black Hole Recycle Bin.exe";
         private const string ArchiveResource = "BlackHoleRecycleBinPortable.Archive";
 
