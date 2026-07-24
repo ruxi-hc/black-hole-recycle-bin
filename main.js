@@ -3,6 +3,8 @@ const path = require("node:path");
 
 let blackHoleWindow;
 let windowDrag;
+let nextInfallId = 0;
+const pendingInfalls = new Map();
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!hasSingleInstanceLock) {
@@ -75,21 +77,29 @@ app.whenReady().then(() => {
     windowDrag = undefined;
   });
 
-  ipcMain.on("begin-infall", async (event, payload) => {
+  ipcMain.on("begin-infall", (event, payload) => {
     const paths = [...new Set(payload?.paths || [])].filter(canRecycle);
     if (!paths.length) return;
+    const id = ++nextInfallId;
+    pendingInfalls.set(id, { paths, sender: event.sender });
     event.sender.send("begin-infall", {
+      id,
       names: paths.map((filePath) => path.basename(filePath)),
       clientX: Number(payload?.clientX) || 0,
       clientY: Number(payload?.clientY) || 0,
     });
-    await new Promise((resolve) => setTimeout(resolve, 1350));
-    for (const filePath of paths) {
+  });
+
+  ipcMain.on("infall-complete", async (event, id) => {
+    const pending = pendingInfalls.get(id);
+    if (!pending || pending.sender.id !== event.sender.id) return;
+    pendingInfalls.delete(id);
+    for (const filePath of pending.paths) {
       try {
         await shell.trashItem(filePath);
-        blackHoleWindow?.webContents.send("recycle-complete", path.basename(filePath));
+        event.sender.send("recycle-complete", path.basename(filePath));
       } catch (error) {
-        blackHoleWindow?.webContents.send("recycle-failed", path.basename(filePath));
+        event.sender.send("recycle-failed", path.basename(filePath));
         console.error("Could not recycle dropped file", error);
       }
     }
