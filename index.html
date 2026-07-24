@@ -17,6 +17,9 @@
             height: 100vh;
         }
         #glCanvas {
+            position: fixed;
+            inset: 0;
+            z-index: 2;
             cursor: grab;
         }
         #glCanvas:active {
@@ -25,12 +28,13 @@
         #inner-ring {
             position: fixed;
             inset: 0;
-            z-index: 2;
+            z-index: 3;
             pointer-events: none;
         }
         #infall-layer {
             position: fixed;
             inset: 0;
+            z-index: 5;
             pointer-events: none;
         }
         .infall-card {
@@ -64,74 +68,20 @@
             pointer-events: none;
             will-change: transform, opacity;
         }
-        .event-horizon-flash {
-            position: absolute;
-            z-index: 4;
-            left: 50%;
-            top: 50%;
-            width: 58px;
-            height: 16px;
-            border: 1px solid rgba(255, 250, 228, 0.9);
-            border-radius: 50%;
-            box-shadow: 0 0 13px 4px rgba(255, 229, 174, 0.74);
-            pointer-events: none;
-            transform: translate(-50%, -50%) rotate(-20deg);
-            animation: horizon-flash 640ms cubic-bezier(0.12, 0.78, 0.18, 1) forwards;
-        }
-        @keyframes horizon-flash {
-            0% { opacity: 0; transform: translate(-50%, -50%) rotate(-20deg) scale(2.7, 1.5); }
-            30% { opacity: 0.96; }
-            100% { opacity: 0; transform: translate(-50%, -50%) rotate(-20deg) scale(0.08, 0.14); }
-        }
-        .accretion-boost {
-            position: absolute;
-            z-index: 3;
-            left: 50%;
-            top: 50%;
-            width: 124px;
-            height: 22px;
-            border: 1px solid rgba(255, 244, 214, 0.72);
-            border-radius: 50%;
-            box-shadow: 0 0 11px 5px rgba(255, 229, 176, 0.7), inset 0 0 8px rgba(255, 249, 231, 0.58);
-            mix-blend-mode: screen;
-            pointer-events: none;
-            transform: translate(-50%, -50%) rotate(-20deg);
-            animation: accretion-boost 780ms cubic-bezier(0.13, 0.7, 0.2, 1) forwards;
-        }
-        @keyframes accretion-boost {
-            0% { opacity: 0; transform: translate(-50%, -50%) rotate(-20deg) scale(0.58, 0.66); }
-            28% { opacity: 0.94; }
-            100% { opacity: 0; transform: translate(-50%, -50%) rotate(-20deg) scale(1.12, 1.04); }
-        }
-        body.feeding::after {
-            position: fixed;
-            left: 50%;
-            top: 50%;
-            width: 16px;
-            height: 16px;
-            border: 2px solid rgba(255, 249, 226, 0.95);
-            border-radius: 50%;
-            box-shadow: 0 0 26px 14px rgba(255, 235, 190, 0.72);
-            content: "";
-            pointer-events: none;
-            animation: swallow-pulse 0.72s cubic-bezier(0.12, 0.78, 0.18, 1) forwards;
-        }
-        @keyframes swallow-pulse {
-            0% { opacity: 0; transform: translate(-50%, -50%) scale(2.2); }
-            32% { opacity: 0.88; }
-            100% { opacity: 0; transform: translate(-50%, -50%) scale(0.12); }
-        }
-        #drag-proxy {
+        #drag-proxy-back,
+        #drag-proxy-front {
             position: fixed;
             inset: 0;
-            z-index: 4;
             width: 100vw;
             height: 100vh;
             pointer-events: none;
             opacity: 0;
             transition: opacity 75ms linear;
         }
-        #drag-proxy.active { opacity: 1; }
+        #drag-proxy-back { z-index: 1; }
+        #drag-proxy-front { z-index: 4; }
+        #drag-proxy-back.active,
+        #drag-proxy-front.active { opacity: 1; }
         .recycle-feedback {
             position: absolute;
             left: 50%;
@@ -177,10 +127,11 @@
         <label for="jitterStrength">抖动强度: <span id="jitterValue">1.0</span></label>
         <input type="range" id="jitterStrength" min="0" max="5" step="0.1" value="1.0">
     </div>
+    <canvas id="drag-proxy-back" aria-hidden="true"></canvas>
     <canvas id="glCanvas" width="480" height="302"></canvas>
     <canvas id="inner-ring" aria-hidden="true"></canvas>
+    <canvas id="drag-proxy-front" aria-hidden="true"></canvas>
     <div id="infall-layer"></div>
-    <canvas id="drag-proxy" aria-hidden="true"></canvas>
     
     <script>
         // 顶点着色器源码
@@ -1219,8 +1170,8 @@
                 const state = document.body.dataset.blackHoleState;
                 const capturing = state === 'capture';
                 const sensing = state === 'sensing';
-                const spin = now * (capturing ? 0.00245 : sensing ? 0.00162 : 0.00105);
-                const brightness = capturing ? 1 : sensing ? 0.72 : 0.46;
+                const spin = now * (capturing ? 0.00315 : sensing ? 0.00228 : 0.00105);
+                const brightness = capturing ? 1.42 : sensing ? 1.10 : 0.46;
 
                 haloContext.save();
                 haloContext.translate(centerX, centerY);
@@ -1265,8 +1216,10 @@
         function setupDesktopInteractions() {
             const canvas = document.getElementById('glCanvas');
             const infallLayer = document.getElementById('infall-layer');
-            const dragProxy = document.getElementById('drag-proxy');
-            const dragContext = dragProxy.getContext('2d');
+            const dragProxyBack = document.getElementById('drag-proxy-back');
+            const dragProxyFront = document.getElementById('drag-proxy-front');
+            const dragBackContext = dragProxyBack.getContext('2d');
+            const dragFrontContext = dragProxyFront.getContext('2d');
             const fileSprite = document.createElement('canvas');
             const spriteWidth = 66;
             const spriteHeight = 72;
@@ -1279,6 +1232,11 @@
             let dragState;
             let dragAnimationFrame;
             let completeStateTimer;
+            let vortexAnimationFrame;
+            let activeInfall;
+            const ACCRETION_ROTATION = -1;
+            const CAPTURE_DURATION = 2050;
+            const ORBIT_DURATION = 1335;
             const InteractionState = Object.freeze({
                 NORMAL: 'normal',
                 SENSING: 'sensing',
@@ -1332,8 +1290,8 @@
                 return {
                     coreX: canvas.clientWidth / 2,
                     coreY: canvas.clientHeight / 2,
-                    lensRadius: Math.max(76, Math.min(canvas.clientWidth * 0.78, canvas.clientHeight * 1.12)),
-                    captureRadius: Math.max(28, Math.min(40, canvas.clientHeight * 0.25)),
+                    lensRadius: Math.max(104, Math.min(112, canvas.clientWidth * 0.44)),
+                    captureRadius: Math.max(58, Math.min(64, canvas.clientWidth * 0.248)),
                     horizonRadius: Math.max(12, Math.min(18, canvas.clientHeight * 0.12)),
                     diskAspect: 0.56,
                 };
@@ -1412,85 +1370,77 @@
                 context.restore();
             }
 
-            function prepareDragCanvas() {
+            function prepareDragCanvases() {
                 const density = Math.min(window.devicePixelRatio || 1, 2);
                 const width = Math.max(1, Math.round(window.innerWidth * density));
                 const height = Math.max(1, Math.round(window.innerHeight * density));
-                if (dragProxy.width !== width || dragProxy.height !== height) {
-                    dragProxy.width = width;
-                    dragProxy.height = height;
-                }
-                dragContext.setTransform(density, 0, 0, density, 0, 0);
-                dragContext.imageSmoothingEnabled = true;
+                [[dragProxyBack, dragBackContext], [dragProxyFront, dragFrontContext]].forEach(([proxy, context]) => {
+                    if (proxy.width !== width || proxy.height !== height) {
+                        proxy.width = width;
+                        proxy.height = height;
+                    }
+                    context.setTransform(density, 0, 0, density, 0, 0);
+                    context.imageSmoothingEnabled = true;
+                });
             }
 
             function clearDragProxy() {
-                prepareDragCanvas();
-                dragContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+                prepareDragCanvases();
+                dragBackContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+                dragFrontContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
             }
 
-            function drawInflowParticles(geometry, now, intensity, captured) {
-                const particleCount = captured ? 18 : 11;
-                const outerRadius = Math.min(geometry.lensRadius * 0.58, 98);
-                dragContext.save();
-                dragContext.globalCompositeOperation = 'screen';
-                for (let index = 0; index < particleCount; index += 1) {
-                    const cadence = 0.00024 * (0.78 + (index % 5) * 0.11) * (captured ? 1.9 : 1);
-                    const phase = (now * cadence + index * 0.173) % 1;
-                    const inward = Math.pow(phase, captured ? 0.64 : 1.12);
-                    const radius = geometry.horizonRadius * 1.2 + (outerRadius - geometry.horizonRadius) * (1 - inward);
-                    const angle = index * 2.399 + now * 0.00034 * (captured ? 1.7 : 0.78) + inward * 2.5;
-                    const x = geometry.coreX + Math.cos(angle) * radius;
-                    const y = geometry.coreY + Math.sin(angle) * radius * geometry.diskAspect;
-                    const size = 0.8 + inward * 1.8;
-                    dragContext.globalAlpha = intensity * (0.16 + inward * 0.55);
-                    dragContext.fillStyle = index % 3 === 0 ? '#fffaf0' : '#f4dfb7';
-                    dragContext.beginPath();
-                    dragContext.arc(x, y, size, 0, Math.PI * 2);
-                    dragContext.fill();
-                }
-                dragContext.restore();
+            function getEllipticPolar(x, y, geometry) {
+                const localX = x - geometry.coreX;
+                const localY = (y - geometry.coreY) / geometry.diskAspect;
+                return {
+                    localX,
+                    localY,
+                    r: Math.max(0.001, Math.hypot(localX, localY)),
+                    theta: Math.atan2(localY, localX),
+                };
             }
 
-            function drawEventHorizonOccluder(geometry, opacity, inwardPull) {
-                if (opacity <= 0) return;
-                dragContext.save();
-                dragContext.globalAlpha = clamp(opacity, 0, 1);
-                dragContext.fillStyle = '#000000';
-                dragContext.beginPath();
-                dragContext.arc(
-                    geometry.coreX,
-                    geometry.coreY,
-                    geometry.horizonRadius * (1 + inwardPull * 0.46),
-                    0,
-                    Math.PI * 2,
-                );
-                dragContext.fill();
-                dragContext.restore();
+            function getDepth(theta) {
+                return 0.5 + 0.5 * Math.sin(theta);
             }
 
-            // Based on GreenScreen410/singularity (MIT): a radial 1/r ray bend
-            // plus frame-dragging twist. Each mesh point follows its own ray.
+            // Each mesh vertex follows its own bent ray. Horizon visibility is evaluated
+            // per vertex so the event horizon consumes the material instead of masking it late.
             function lensPoint(x, y, geometry, captureProgress) {
                 const offsetX = x - geometry.coreX;
                 const offsetY = y - geometry.coreY;
                 const distance = Math.max(0.75, Math.hypot(offsetX, offsetY));
                 const lensStrength = Math.pow(clamp(1 - distance / geometry.lensRadius, 0, 1), 1.32);
-                if (lensStrength < 0.004) return { x, y, opacity: 1 };
+                const polar = getEllipticPolar(x, y, geometry);
+                if (lensStrength < 0.004) {
+                    return { x, y, opacity: 1, depth: getDepth(polar.theta), horizonVisibility: 1 };
+                }
 
                 const angle = Math.atan2(offsetY, offsetX);
                 const inwardPull = Math.min(distance * 0.30, 15) * lensStrength;
                 const sourceRadius = Math.max(2, distance - inwardPull);
                 const unscaledDeflection = (7 + 780 / (distance + 18)) * lensStrength * (0.42 + lensStrength * 0.58);
-                const deflection = unscaledDeflection * (1 - captureProgress * 0.92);
-                const frameDrag = -(0.09 + 0.83 * lensStrength * lensStrength) * (lensStrength + captureProgress * 0.42);
+                const horizonApproach = Math.pow(clamp(1 - polar.r / (geometry.captureRadius * 1.35), 0, 1), 1.45);
+                const deflection = unscaledDeflection * (1 + captureProgress * 0.74 + horizonApproach * 0.92);
+                const frameDrag = ACCRETION_ROTATION * (0.05 + 0.72 * lensStrength * lensStrength)
+                    * (lensStrength + captureProgress * 0.58 + horizonApproach * 0.36);
                 const mappedRadius = sourceRadius + deflection;
-                const horizonFade = smoothstep(8, 18, distance);
+                const mappedX = geometry.coreX + Math.cos(angle + frameDrag) * mappedRadius;
+                const mappedY = geometry.coreY + Math.sin(angle + frameDrag) * mappedRadius;
+                const mappedPolar = getEllipticPolar(mappedX, mappedY, geometry);
+                const horizonVisibility = smoothstep(
+                    geometry.horizonRadius * 0.74,
+                    geometry.horizonRadius * 1.20,
+                    Math.min(polar.r, mappedPolar.r),
+                );
 
                 return {
-                    x: geometry.coreX + Math.cos(angle + frameDrag) * mappedRadius,
-                    y: geometry.coreY + Math.sin(angle + frameDrag) * mappedRadius,
-                    opacity: 0.34 + horizonFade * 0.66,
+                    x: mappedX,
+                    y: mappedY,
+                    opacity: 0.26 + horizonVisibility * 0.74,
+                    depth: getDepth(mappedPolar.theta),
+                    horizonVisibility,
                 };
             }
 
@@ -1499,18 +1449,28 @@
                 const localY = point.y - spriteHeight / 2;
                 const field = gravityField(dragState.x, dragState.y, geometry);
                 const captureProgress = dragState.captureProgress || 0;
+                const polar = getEllipticPolar(dragState.x, dragState.y, geometry);
+                const nearHorizon = Math.pow(clamp(1 - polar.r / (geometry.captureRadius * 1.30), 0, 1), 1.35);
                 const tidal = dragState.phase === InteractionState.CAPTURE
-                    ? 0.16 + Math.pow(captureProgress, 1.28) * 1.12
+                    ? 0.12 + Math.pow(captureProgress, 1.12) * 0.66 + nearHorizon * 1.34
                     : field.strength * 0.24;
                 const orientation = dragState.phase === InteractionState.CAPTURE
-                    ? dragState.orbitAngle + Math.PI / 2
+                    ? dragState.theta + Math.PI / 2
                     : Math.atan2(dragState.y - geometry.coreY, dragState.x - geometry.coreX) + Math.PI / 2 - field.strength * 0.32;
-                const massScale = dragState.phase === InteractionState.CAPTURE
-                    ? 1 - captureProgress * 0.46
+                const materialStage = smoothstep(0.48, 0.84, captureProgress);
+                const streamCollapse = smoothstep(0.85, 1, captureProgress);
+                const orbitScale = dragState.phase === InteractionState.CAPTURE
+                    ? lerp(1, 1.12, smoothstep(0.02, 0.15, captureProgress))
                     : 1;
-                const tangentialLength = (1 + tidal * 2.8) * massScale;
-                const radialCompression = Math.max(0.045, (1 - tidal * 0.72) * massScale);
-                const stretchedX = localX * tangentialLength;
+                const tangentialLength = dragState.phase === InteractionState.CAPTURE
+                    ? orbitScale * lerp(1.04, 3.82, materialStage) * (1 + nearHorizon * 0.18)
+                        * (1 - streamCollapse * 0.66)
+                    : 1 + tidal * 0.82;
+                const radialCompression = dragState.phase === InteractionState.CAPTURE
+                    ? Math.max(0.12, orbitScale * lerp(1, 0.145, materialStage) * (1 - streamCollapse * 0.28))
+                    : 1 - tidal * 0.26;
+                const shear = ACCRETION_ROTATION * (localY / spriteHeight) * tidal * (4 + materialStage * 6);
+                const stretchedX = (localX + shear) * tangentialLength;
                 const compressedY = localY * radialCompression;
                 const cosine = Math.cos(orientation);
                 const sine = Math.sin(orientation);
@@ -1521,7 +1481,7 @@
                 };
             }
 
-            function drawTextureTriangle(sourceA, sourceB, sourceC, destinationA, destinationB, destinationC, opacity) {
+            function drawTextureTriangle(context, sourceA, sourceB, sourceC, destinationA, destinationB, destinationC, opacity) {
                 const sourceABX = sourceB.x - sourceA.x;
                 const sourceABY = sourceB.y - sourceA.y;
                 const sourceACX = sourceC.x - sourceA.x;
@@ -1540,37 +1500,171 @@
                 const e = destinationA.x - a * sourceA.x - c * sourceA.y;
                 const f = destinationA.y - b * sourceA.x - d * sourceA.y;
 
-                dragContext.save();
-                dragContext.globalAlpha = clamp(opacity, 0, 1);
-                dragContext.beginPath();
-                dragContext.moveTo(destinationA.x, destinationA.y);
-                dragContext.lineTo(destinationB.x, destinationB.y);
-                dragContext.lineTo(destinationC.x, destinationC.y);
-                dragContext.closePath();
-                dragContext.clip();
-                dragContext.transform(a, b, c, d, e, f);
-                dragContext.drawImage(fileSprite, 0, 0);
-                dragContext.restore();
+                context.save();
+                context.globalAlpha = clamp(opacity, 0, 1);
+                context.beginPath();
+                context.moveTo(destinationA.x, destinationA.y);
+                context.lineTo(destinationB.x, destinationB.y);
+                context.lineTo(destinationC.x, destinationC.y);
+                context.closePath();
+                context.clip();
+                context.transform(a, b, c, d, e, f);
+                context.drawImage(fileSprite, 0, 0);
+                context.restore();
+            }
+
+            function drawMatterRibbon(context, geometry, frontLayer) {
+                const trail = dragState?.trail || [];
+                if (trail.length < 2) return;
+                context.save();
+                context.globalCompositeOperation = 'screen';
+                for (let index = 1; index < trail.length; index += 1) {
+                    const previous = trail[index - 1];
+                    const current = trail[index];
+                    const depth = (previous.depth + current.depth) * 0.5;
+                    const layerWeight = frontLayer
+                        ? smoothstep(0.38, 0.62, depth)
+                        : 1 - smoothstep(0.38, 0.62, depth);
+                    if (layerWeight < 0.02) continue;
+                    const age = index / trail.length;
+                    const filament = smoothstep(0.48, 0.96, dragState.captureProgress || 0);
+                    context.globalAlpha = layerWeight * age * age * (0.31 + filament * 0.42);
+                    context.strokeStyle = filament > 0.26
+                        ? (age > 0.56 ? '#fff9df' : '#e5b85f')
+                        : (age > 0.72 ? '#fff7df' : '#d8b879');
+                    context.lineWidth = 0.50 + age * (1.75 + filament * 2.35);
+                    context.beginPath();
+                    context.moveTo(previous.x, previous.y);
+                    context.lineTo(current.x, current.y);
+                    context.stroke();
+                }
+                context.restore();
+            }
+
+            function recordMotionHistory(state, now) {
+                state.motionHistory ||= [];
+                const last = state.motionHistory[state.motionHistory.length - 1];
+                if (last && now - last.time < 18) return;
+                state.motionHistory.push({
+                    x: state.x,
+                    y: state.y,
+                    vx: state.vx,
+                    vy: state.vy,
+                    time: now,
+                });
+                if (state.motionHistory.length > 22) state.motionHistory.shift();
+            }
+
+            function drawGravityAfterimages(context, geometry) {
+                if (dragState?.phase !== InteractionState.SENSING) return;
+                const history = dragState.motionHistory || [];
+                const field = gravityField(dragState.x, dragState.y, geometry);
+                if (history.length < 7 || field.strength < 0.035) return;
+                context.save();
+                context.globalCompositeOperation = 'screen';
+                for (let ghost = 0; ghost < 3; ghost += 1) {
+                    const sampleIndex = Math.max(0, history.length - 1 - (ghost + 1) * 4);
+                    const sample = history[sampleIndex];
+                    const velocityAngle = Math.atan2(sample.vy, sample.vx);
+                    const strength = Math.pow(field.strength, 0.45);
+                    context.save();
+                    context.globalAlpha = (0.42 - ghost * 0.10) * strength;
+                    context.translate(sample.x, sample.y);
+                    context.rotate(velocityAngle + ACCRETION_ROTATION * (0.08 + ghost * 0.04));
+                    context.scale(1 + strength * (0.08 - ghost * 0.015), 1 - strength * 0.08);
+                    context.drawImage(fileSprite, -spriteWidth / 2, -spriteHeight / 2);
+                    context.restore();
+                }
+                context.restore();
+            }
+
+            function updateShedParticles(state, geometry, deltaTime, now) {
+                state.shedParticles ||= [];
+                const captureProgress = state.captureProgress || 0;
+                if (captureProgress > 0.14 && now - (state.lastShedAt || 0) > 48 && state.shedParticles.length < 42) {
+                    state.lastShedAt = now;
+                    const edgeStep = state.shedSequence = (state.shedSequence || 0) + 1;
+                    const edgePhase = (edgeStep % 12) / 11 - 0.5;
+                    const useLongEdge = edgeStep % 3 !== 0;
+                    const tangentOffset = useLongEdge ? edgePhase * spriteWidth : (edgeStep % 2 ? -1 : 1) * spriteWidth * 0.48;
+                    const radialOffset = useLongEdge ? (edgeStep % 2 ? -1 : 1) * spriteHeight * 0.40 : edgePhase * spriteHeight;
+                    const tidal = 1 + captureProgress * 3.2;
+                    const tangentAngle = state.theta + Math.PI / 2;
+                    const edgeX = state.x
+                        + Math.cos(tangentAngle) * tangentOffset * tidal
+                        + Math.cos(state.theta) * radialOffset * Math.max(0.06, 1 - captureProgress * 0.65);
+                    const edgeY = state.y
+                        + Math.sin(tangentAngle) * tangentOffset * tidal
+                        + Math.sin(state.theta) * radialOffset * Math.max(0.06, 1 - captureProgress * 0.65);
+                    const edgeVelocity = 22 + (edgeStep % 4) * 8;
+                    state.shedParticles.push({
+                        x: edgeX,
+                        y: edgeY,
+                        vx: state.vx + Math.cos(tangentAngle) * edgeVelocity * ACCRETION_ROTATION,
+                        vy: state.vy + Math.sin(tangentAngle) * edgeVelocity * ACCRETION_ROTATION,
+                        life: 0.18 + (edgeStep % 5) * 0.025,
+                        maxLife: 0.30,
+                        size: 0.65 + (edgeStep % 3) * 0.26,
+                    });
+                }
+
+                state.shedParticles = state.shedParticles.filter((particle) => {
+                    const polar = getEllipticPolar(particle.x, particle.y, geometry);
+                    const radialX = Math.cos(polar.theta);
+                    const radialY = Math.sin(polar.theta) * geometry.diskAspect;
+                    const tangentX = -Math.sin(polar.theta) * ACCRETION_ROTATION;
+                    const tangentY = Math.cos(polar.theta) * geometry.diskAspect * ACCRETION_ROTATION;
+                    const attraction = 80 + 5200 / (polar.r + 16);
+                    particle.vx += (-radialX * attraction + tangentX * attraction * 0.36) * deltaTime;
+                    particle.vy += (-radialY * attraction + tangentY * attraction * 0.36) * deltaTime;
+                    particle.x += particle.vx * deltaTime;
+                    particle.y += particle.vy * deltaTime;
+                    particle.life -= deltaTime;
+                    return particle.life > 0 && polar.r > geometry.horizonRadius * 0.55;
+                });
+            }
+
+            function drawShedParticles(context, geometry, frontLayer) {
+                const particles = dragState?.shedParticles || [];
+                context.save();
+                context.globalCompositeOperation = 'screen';
+                particles.forEach((particle) => {
+                    const polar = getEllipticPolar(particle.x, particle.y, geometry);
+                    const depth = getDepth(polar.theta);
+                    const layerWeight = frontLayer
+                        ? smoothstep(0.38, 0.62, depth)
+                        : 1 - smoothstep(0.38, 0.62, depth);
+                    const life = particle.life / particle.maxLife;
+                    context.globalAlpha = layerWeight * life * 0.70;
+                    context.fillStyle = depth > 0.55 ? '#fff5dc' : '#c99c58';
+                    context.beginPath();
+                    context.arc(particle.x, particle.y, particle.size * (0.55 + life * 0.45), 0, Math.PI * 2);
+                    context.fill();
+                });
+                context.restore();
             }
 
             function renderLensedDrag(now) {
                 if (!dragState) return;
-                prepareDragCanvas();
-                dragContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+                prepareDragCanvases();
+                dragBackContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+                dragFrontContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
 
                 const geometry = getBlackHoleGeometry();
                 const field = gravityField(dragState.x, dragState.y, geometry);
                 const captureProgress = dragState.captureProgress || 0;
-                const visibleOpacity = (dragState.opacity ?? 1) * (dragState.backside ? 0.34 : 1);
+                const visibleOpacity = dragState.materialOpacity ?? 1;
                 const shouldDrawMesh = dragState.phase !== InteractionState.NORMAL || field.strength >= 0.004;
+                drawGravityAfterimages(dragFrontContext, geometry);
                 if (!shouldDrawMesh) {
-                    dragContext.globalAlpha = visibleOpacity;
-                    dragContext.drawImage(fileSprite, dragState.x - spriteWidth / 2, dragState.y - spriteHeight / 2);
-                    dragContext.globalAlpha = 1;
+                    dragFrontContext.globalAlpha = visibleOpacity;
+                    dragFrontContext.drawImage(fileSprite, dragState.x - spriteWidth / 2, dragState.y - spriteHeight / 2);
+                    dragFrontContext.globalAlpha = 1;
                     return;
                 }
 
-                drawInflowParticles(geometry, now, Math.max(field.strength, captureProgress * 0.88), dragState.phase === InteractionState.CAPTURE);
+                drawMatterRibbon(dragBackContext, geometry, false);
+                drawShedParticles(dragBackContext, geometry, false);
                 const cellWidth = spriteWidth / meshColumns;
                 const cellHeight = spriteHeight / meshRows;
                 for (let row = 0; row < meshRows; row += 1) {
@@ -1591,53 +1685,75 @@
                         const destinationB = toScreen(sourceB);
                         const destinationC = toScreen(sourceC);
                         const destinationD = toScreen(sourceD);
-                        drawTextureTriangle(sourceA, sourceB, sourceC, destinationA, destinationB, destinationC,
-                            visibleOpacity * (destinationA.opacity + destinationB.opacity + destinationC.opacity) / 3);
-                        drawTextureTriangle(sourceA, sourceC, sourceD, destinationA, destinationC, destinationD,
-                            visibleOpacity * (destinationA.opacity + destinationC.opacity + destinationD.opacity) / 3);
+                        const drawTriangleToLayers = (source1, source2, source3, destination1, destination2, destination3) => {
+                            const depth = (destination1.depth + destination2.depth + destination3.depth) / 3;
+                            const horizon = (destination1.horizonVisibility + destination2.horizonVisibility + destination3.horizonVisibility) / 3;
+                            const opacity = visibleOpacity * horizon
+                                * (destination1.opacity + destination2.opacity + destination3.opacity) / 3;
+                            if (opacity < 0.004) return;
+                            const frontWeight = smoothstep(0.38, 0.62, depth);
+                            const brightness = 0.15 + depth * 0.85;
+                            if (frontWeight < 0.99) {
+                                drawTextureTriangle(
+                                    dragBackContext, source1, source2, source3, destination1, destination2, destination3,
+                                    opacity * (1 - frontWeight) * brightness,
+                                );
+                            }
+                            if (frontWeight > 0.01) {
+                                drawTextureTriangle(
+                                    dragFrontContext, source1, source2, source3, destination1, destination2, destination3,
+                                    opacity * frontWeight * brightness,
+                                );
+                            }
+                        };
+                        drawTriangleToLayers(sourceA, sourceB, sourceC, destinationA, destinationB, destinationC);
+                        drawTriangleToLayers(sourceA, sourceC, sourceD, destinationA, destinationC, destinationD);
                     }
                 }
-                if (dragState.phase === InteractionState.CAPTURE) {
-                    drawEventHorizonOccluder(
-                        geometry,
-                        dragState.backside ? 0.92 : dragState.horizonMask || 0,
-                        dragState.horizonMask || 0,
-                    );
-                }
+                drawMatterRibbon(dragFrontContext, geometry, true);
+                drawShedParticles(dragFrontContext, geometry, true);
             }
 
-            function beginCapture(now, geometry = getBlackHoleGeometry()) {
-                if (!dragState || dragState.phase === InteractionState.CAPTURE) return;
-                const offsetX = dragState.x - geometry.coreX;
-                const offsetY = dragState.y - geometry.coreY;
+            function beginCapture(now, geometry = getBlackHoleGeometry(), infallId) {
+                if (!dragState) return;
+                if (infallId) dragState.infallId = infallId;
+                if (dragState.phase === InteractionState.CAPTURE) return;
+                const polar = getEllipticPolar(dragState.x, dragState.y, geometry);
+                const scaledVelocityY = dragState.vy / geometry.diskAspect;
                 dragState.phase = InteractionState.CAPTURE;
                 dragState.captureStartedAt = now;
                 dragState.captureProgress = 0;
-                dragState.captureRadius = Math.max(geometry.captureRadius * 1.2, Math.hypot(offsetX, offsetY / geometry.diskAspect));
+                dragState.r = polar.r;
+                dragState.theta = polar.theta;
+                dragState.initialRadius = polar.r;
                 dragState.orbitRadius = clamp(
-                    dragState.captureRadius * 0.60,
-                    geometry.captureRadius * 1.15,
-                    geometry.captureRadius * 2.10,
+                    Math.max(polar.r * 0.78, geometry.captureRadius * 0.74),
+                    geometry.captureRadius * 0.66,
+                    geometry.captureRadius * 0.94,
                 );
-                dragState.captureAngle = Math.atan2(offsetY / geometry.diskAspect, offsetX);
-                dragState.orbitAngle = dragState.captureAngle;
-                dragState.captureDirection = offsetX >= 0 ? -1 : 1;
-                dragState.backside = false;
-                dragState.horizonMask = 0;
-                dragState.vx = 0;
-                dragState.vy = 0;
+                dragState.radialVelocity = (polar.localX * dragState.vx + polar.localY * scaledVelocityY) / polar.r;
+                dragState.angularVelocity = (polar.localX * scaledVelocityY - polar.localY * dragState.vx) / (polar.r * polar.r);
+                dragState.angularMomentum = polar.r * polar.r * dragState.angularVelocity;
+                dragState.trail = [];
+                dragState.shedParticles = [];
+                dragState.lastShedAt = now;
+                dragState.materialOpacity = 1;
+                dragState.motionHistory ||= [];
                 setInteractionState(InteractionState.CAPTURE);
             }
 
             function finishCapture() {
                 if (!dragState) return;
+                const infallId = dragState.infallId;
+                const residualTrail = dragState.trail.slice(-30);
                 dragState = undefined;
-                dragProxy.classList.remove('active');
+                dragProxyBack.classList.remove('active');
+                dragProxyFront.classList.remove('active');
                 clearDragProxy();
                 setInteractionState(InteractionState.COMPLETE);
-                triggerHorizonFlash();
                 window.clearTimeout(completeStateTimer);
-                completeStateTimer = window.setTimeout(() => setInteractionState(InteractionState.NORMAL), 820);
+                completeStateTimer = window.setTimeout(() => setInteractionState(InteractionState.NORMAL), 460);
+                markPrimaryVisualComplete(infallId, residualTrail);
             }
 
             function updateDragPhysics(now) {
@@ -1649,27 +1765,56 @@
                 state.lastFrame = now;
 
                 if (state.phase === InteractionState.CAPTURE) {
-                    const progress = clamp((now - state.captureStartedAt) / 1460, 0, 1);
-                    const orbitStage = clamp(progress / 0.58, 0, 1);
-                    const plungeStage = clamp((progress - 0.58) / 0.42, 0, 1);
-                    const settling = smoothstep(0.04, 0.46, progress);
-                    const radius = progress < 0.58
-                        ? lerp(state.captureRadius, state.orbitRadius, settling)
-                        : Math.max(
-                            geometry.horizonRadius * 0.18,
-                            state.orbitRadius * Math.pow(1 - plungeStage, 0.42),
-                        );
-                    const turns = progress < 0.58
-                        ? 0.10 + Math.pow(orbitStage, 1.05) * 0.82
-                        : 0.92 + Math.pow(plungeStage, 1.72) * 0.50;
-                    state.orbitAngle = state.captureAngle + state.captureDirection * turns * Math.PI * 2;
-                    state.x = geometry.coreX + Math.cos(state.orbitAngle) * radius;
-                    state.y = geometry.coreY + Math.sin(state.orbitAngle) * radius * geometry.diskAspect;
+                    const elapsedCapture = Math.max(0, now - state.captureStartedAt);
+                    const progress = clamp(elapsedCapture / CAPTURE_DURATION, 0, 1);
+                    const orbitProgress = clamp(elapsedCapture / ORBIT_DURATION, 0, 1);
+                    const plungeProgress = clamp((elapsedCapture - ORBIT_DURATION) / (CAPTURE_DURATION - ORBIT_DURATION), 0, 1);
+                    const settle = smoothstep(0.08, 0.94, orbitProgress);
+                    const orbitTarget = lerp(state.initialRadius, state.orbitRadius, settle);
+                    const radialTarget = plungeProgress > 0
+                        ? lerp(orbitTarget, geometry.horizonRadius * 0.08, Math.pow(plungeProgress, 0.72))
+                        : orbitTarget;
+                    const targetAngularVelocity = ACCRETION_ROTATION * (6.70 + orbitProgress * 0.82 + plungeProgress * 4.70);
+                    const targetMomentum = targetAngularVelocity * state.r * state.r;
+                    const torqueResponse = 5.25 + orbitProgress * 2.55 + plungeProgress * 5.8;
+                    state.angularMomentum += (targetMomentum - state.angularMomentum) * torqueResponse * deltaTime;
+                    state.angularMomentum *= Math.exp(-(0.22 + plungeProgress * 2.4) * deltaTime);
+                    state.angularVelocity = state.angularMomentum / Math.max(state.r * state.r, 1);
+
+                    const gravitationalPull = 88 + 52000 / Math.pow(state.r + 30, 2);
+                    const ringRestoring = (radialTarget - state.r) * (7.8 + orbitProgress * 9.4 + plungeProgress * 22);
+                    const centrifugalSupport = state.r * state.angularVelocity * state.angularVelocity * 0.075;
+                    const viscousDrag = (2.4 + orbitProgress * 2.3 + plungeProgress * 6.8) * state.radialVelocity;
+                    const plungeDrive = plungeProgress * (160 + 980 * plungeProgress);
+                    state.radialVelocity += (
+                        ringRestoring - gravitationalPull + centrifugalSupport - viscousDrag - plungeDrive
+                    ) * deltaTime;
+                    state.radialVelocity = clamp(state.radialVelocity, -620, 155);
+                    state.r = Math.max(geometry.horizonRadius * 0.06, state.r + state.radialVelocity * deltaTime);
+                    state.theta += state.angularVelocity * deltaTime;
+                    state.x = geometry.coreX + Math.cos(state.theta) * state.r;
+                    state.y = geometry.coreY + Math.sin(state.theta) * state.r * geometry.diskAspect;
+                    state.vx = Math.cos(state.theta) * state.radialVelocity
+                        - Math.sin(state.theta) * state.r * state.angularVelocity;
+                    state.vy = geometry.diskAspect * (
+                        Math.sin(state.theta) * state.radialVelocity
+                        + Math.cos(state.theta) * state.r * state.angularVelocity
+                    );
                     state.captureProgress = progress;
-                    state.backside = progress < 0.88 && Math.sin(state.orbitAngle) < -0.22;
-                    state.horizonMask = smoothstep(0.84, 1, progress);
-                    state.opacity = 1;
-                    if (progress >= 1) finishCapture();
+                    state.materialOpacity = 1;
+                    state.trail.push({
+                        x: state.x,
+                        y: state.y,
+                        vx: state.vx,
+                        vy: state.vy,
+                        r: state.r,
+                        theta: state.theta,
+                        depth: getDepth(state.theta),
+                    });
+                    if (state.trail.length > 38) state.trail.shift();
+                    updateShedParticles(state, geometry, deltaTime, now);
+                    recordMotionHistory(state, now);
+                    if (progress >= 1 || (progress >= 0.96 && state.r <= geometry.horizonRadius * 0.11)) finishCapture();
                     return;
                 }
 
@@ -1683,29 +1828,37 @@
                     const follow = Math.min(1, deltaTime * 26);
                     state.x += (state.targetX - state.x) * follow;
                     state.y += (state.targetY - state.y) * follow;
+                    recordMotionHistory(state, now);
                     return;
                 }
 
                 const field = gravityField(state.x, state.y, geometry);
                 const releasing = targetField.strength < 0.018;
                 const cursorPull = (64 + targetField.strength * 118) * (releasing ? 4.6 : 1);
-                const gravityAcceleration = (92 + 4200 / (field.distance + 26))
-                    * Math.pow(Math.max(field.strength, 0.06), 1.18)
-                    * (releasing ? 0.34 : 1);
+                const influence = releasing ? 0.28 : 1;
+                const gravityAcceleration = (240 + field.strength * 1800)
+                    * Math.pow(Math.max(field.strength, 0.02), 0.54)
+                    * influence;
+                const tangentialAcceleration = (1180 + field.strength * 2200)
+                    * Math.pow(Math.max(field.strength, 0.02), 0.62)
+                    * influence;
+                const tangentX = field.directionY * ACCRETION_ROTATION;
+                const tangentY = -field.directionX * ACCRETION_ROTATION;
                 state.vx += (state.targetX - state.x) * cursorPull * deltaTime;
                 state.vy += (state.targetY - state.y) * cursorPull * deltaTime;
-                state.vx += (field.directionX - field.directionY * 0.19) * gravityAcceleration * deltaTime;
-                state.vy += (field.directionY + field.directionX * 0.19) * gravityAcceleration * deltaTime;
-                const damping = Math.exp(-(5.7 - field.strength * 1.4) * deltaTime);
+                state.vx += (field.directionX * gravityAcceleration + tangentX * tangentialAcceleration) * deltaTime;
+                state.vy += (field.directionY * gravityAcceleration + tangentY * tangentialAcceleration) * deltaTime;
+                const damping = Math.exp(-(4.2 - field.strength * 1.1) * deltaTime);
                 state.vx *= damping;
                 state.vy *= damping;
                 const speed = Math.hypot(state.vx, state.vy);
-                if (speed > 460) {
-                    state.vx = state.vx / speed * 460;
-                    state.vy = state.vy / speed * 460;
+                if (speed > 560) {
+                    state.vx = state.vx / speed * 560;
+                    state.vy = state.vy / speed * 560;
                 }
                 state.x += state.vx * deltaTime;
                 state.y += state.vy * deltaTime;
+                recordMotionHistory(state, now);
                 const updatedField = gravityField(state.x, state.y, geometry);
                 if (releasing && updatedField.strength < 0.018) {
                     state.phase = InteractionState.NORMAL;
@@ -1727,12 +1880,127 @@
                 if (!dragAnimationFrame) dragAnimationFrame = requestAnimationFrame(runDragFrame);
             }
 
+            function drawResidualTail(context, trail, geometry, progress) {
+                if (!trail?.length || trail.length < 2) return;
+                const contraction = Math.pow(progress, 0.72);
+                context.save();
+                context.globalCompositeOperation = 'screen';
+                for (let index = 1; index < trail.length; index += 1) {
+                    const previous = trail[index - 1];
+                    const current = trail[index];
+                    const previousPolar = getEllipticPolar(previous.x, previous.y, geometry);
+                    const currentPolar = getEllipticPolar(current.x, current.y, geometry);
+                    const contractPoint = (polar, age) => {
+                        const radius = lerp(polar.r, geometry.horizonRadius * 0.34, contraction);
+                        const angle = polar.theta + ACCRETION_ROTATION * contraction * (0.32 + age * 0.52);
+                        return {
+                            x: geometry.coreX + Math.cos(angle) * radius,
+                            y: geometry.coreY + Math.sin(angle) * radius * geometry.diskAspect,
+                        };
+                    };
+                    const age = index / trail.length;
+                    const from = contractPoint(previousPolar, age);
+                    const to = contractPoint(currentPolar, age);
+                    context.globalAlpha = (1 - progress * 0.42) * age * (0.42 + age * 0.36);
+                    context.strokeStyle = age > 0.58 ? '#fff9df' : '#dfa84d';
+                    context.lineWidth = 0.9 + age * 2.7;
+                    context.beginPath();
+                    context.moveTo(from.x, from.y);
+                    context.lineTo(to.x, to.y);
+                    context.stroke();
+                }
+                context.restore();
+            }
+
+            function triggerAccretionVortex(onComplete, residualTrail = []) {
+                if (vortexAnimationFrame) cancelAnimationFrame(vortexAnimationFrame);
+                const startedAt = performance.now();
+                const duration = 250;
+                dragProxyFront.classList.add('active');
+
+                function renderVortex(now) {
+                    const progress = clamp((now - startedAt) / duration, 0, 1);
+                    const intensity = Math.sin(Math.PI * progress);
+                    const geometry = getBlackHoleGeometry();
+                    prepareDragCanvases();
+                    dragFrontContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+                    drawResidualTail(dragFrontContext, residualTrail, geometry, progress);
+                    dragFrontContext.save();
+                    dragFrontContext.globalCompositeOperation = 'screen';
+                    const nearSide = Math.PI / 2;
+                    for (let index = 0; index < 10; index += 1) {
+                        const lane = index / 9;
+                        const radius = lerp(
+                            geometry.horizonRadius * (3.2 + lane * 0.48),
+                            geometry.horizonRadius * (0.76 + lane * 0.12),
+                            Math.pow(progress, 0.78),
+                        );
+                        const angle = nearSide + ACCRETION_ROTATION * (0.22 + progress * 2.18 + lane * 0.54);
+                        const nextAngle = angle + ACCRETION_ROTATION * (0.16 + lane * 0.08);
+                        const innerRadius = Math.max(geometry.horizonRadius * 0.54, radius - geometry.horizonRadius * 0.46);
+                        dragFrontContext.globalAlpha = intensity * (0.18 + lane * 0.075);
+                        dragFrontContext.strokeStyle = lane > 0.62 ? '#fff8e5' : '#e3bb78';
+                        dragFrontContext.lineWidth = 0.55 + lane * 0.75;
+                        dragFrontContext.beginPath();
+                        dragFrontContext.moveTo(
+                            geometry.coreX + Math.cos(angle) * radius,
+                            geometry.coreY + Math.sin(angle) * radius * geometry.diskAspect,
+                        );
+                        dragFrontContext.quadraticCurveTo(
+                            geometry.coreX + Math.cos((angle + nextAngle) * 0.5) * (radius + innerRadius) * 0.5,
+                            geometry.coreY + Math.sin((angle + nextAngle) * 0.5) * (radius + innerRadius) * 0.5 * geometry.diskAspect,
+                            geometry.coreX + Math.cos(nextAngle) * innerRadius,
+                            geometry.coreY + Math.sin(nextAngle) * innerRadius * geometry.diskAspect,
+                        );
+                        dragFrontContext.stroke();
+                    }
+                    dragFrontContext.restore();
+                    if (progress < 1) {
+                        vortexAnimationFrame = requestAnimationFrame(renderVortex);
+                    } else {
+                        vortexAnimationFrame = undefined;
+                        dragFrontContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+                        dragProxyFront.classList.remove('active');
+                        onComplete?.();
+                    }
+                }
+                vortexAnimationFrame = requestAnimationFrame(renderVortex);
+            }
+
+            function finishVisualInfallIfReady() {
+                if (!activeInfall || !activeInfall.primaryDone || activeInfall.secondaryPending > 0 || activeInfall.vortexStarted) return;
+                activeInfall.vortexStarted = true;
+                const completedId = activeInfall.id;
+                triggerAccretionVortex(() => {
+                    if (!activeInfall || activeInfall.id !== completedId) return;
+                    activeInfall = undefined;
+                    window.blackHoleHost?.completeInfall(completedId);
+                }, activeInfall.primaryTrail);
+            }
+
+            function markPrimaryVisualComplete(infallId, residualTrail = []) {
+                if (!infallId || !activeInfall || activeInfall.id !== infallId) {
+                    triggerAccretionVortex(undefined, residualTrail);
+                    return;
+                }
+                activeInfall.primaryDone = true;
+                activeInfall.primaryTrail = residualTrail;
+                finishVisualInfallIfReady();
+            }
+
+            function markSecondaryVisualComplete(infallId) {
+                if (!activeInfall || activeInfall.id !== infallId) return;
+                activeInfall.secondaryPending = Math.max(0, activeInfall.secondaryPending - 1);
+                finishVisualInfallIfReady();
+            }
+
             function clearGravity(force = false) {
                 if (dragState?.phase === InteractionState.CAPTURE && !force) return;
                 dragState = undefined;
                 if (dragAnimationFrame) cancelAnimationFrame(dragAnimationFrame);
                 dragAnimationFrame = undefined;
-                dragProxy.classList.remove('active');
+                dragProxyBack.classList.remove('active');
+                dragProxyFront.classList.remove('active');
                 clearDragProxy();
                 if (interactionState !== InteractionState.COMPLETE) setInteractionState(InteractionState.NORMAL);
             }
@@ -1763,7 +2031,8 @@
                     dragState.targetX = event.clientX;
                     dragState.targetY = event.clientY;
                 }
-                dragProxy.classList.add('active');
+                dragProxyBack.classList.add('active');
+                dragProxyFront.classList.add('active');
                 ensureDragLoop();
             }
 
@@ -1777,22 +2046,7 @@
                 if (!event.relatedTarget || !document.documentElement.contains(event.relatedTarget)) clearGravity();
             });
 
-            function triggerHorizonFlash() {
-                const flash = document.createElement('div');
-                const boost = document.createElement('div');
-                flash.className = 'event-horizon-flash';
-                boost.className = 'accretion-boost';
-                infallLayer.appendChild(flash);
-                infallLayer.appendChild(boost);
-                document.body.classList.add('feeding');
-                window.setTimeout(() => {
-                    flash.remove();
-                    boost.remove();
-                    document.body.classList.remove('feeding');
-                }, 820);
-            }
-
-            function animateInfall(file, index, startX, startY) {
+            function animateInfall(file, index, startX, startY, onComplete) {
                 const card = document.createElement('div');
                 const fragments = Array.from({ length: 11 }, () => {
                     const fragment = document.createElement('div');
@@ -1805,10 +2059,9 @@
                 const verticalCompression = 0.58;
                 const startRadius = Math.max(7, Math.hypot(startX - coreX, (startY - coreY) / verticalCompression));
                 const startAngle = Math.atan2((startY - coreY) / verticalCompression, startX - coreX);
-                const direction = startX < coreX ? -1 : 1;
+                const direction = ACCRETION_ROTATION;
                 const startedAt = performance.now() + index * 90;
-                const duration = 1240;
-                let flashed = false;
+                const duration = CAPTURE_DURATION;
 
                 card.className = 'infall-card';
                 card.textContent = file.name;
@@ -1834,12 +2087,12 @@
                     const scaleX = (1 + tidal * 1.92) * (1 - horizonCollapse * 0.86);
                     const scaleY = (1 - tidal * 0.71) * (1 - horizonCollapse * 0.62);
                     const rotation = point.angle * 180 / Math.PI + direction * Math.pow(progress, 2.05) * 470;
-                    const opacity = 1 - smoothstep(0.72, 0.99, progress);
+                    const opacity = 1 - smoothstep(0.94, 0.998, progress);
 
                     card.style.left = `${point.x}px`;
                     card.style.top = `${point.y}px`;
                     card.style.opacity = opacity.toFixed(3);
-                    card.style.filter = `blur(${(progress * 2.1).toFixed(2)}px) brightness(${(1 + progress * 0.85).toFixed(2)})`;
+                    card.style.filter = `blur(${(progress * 2.1).toFixed(2)}px) brightness(${(1 - progress * 0.28).toFixed(2)})`;
                     card.style.transform = `translate(-50%, -50%) rotate(${rotation.toFixed(1)}deg) skewX(${(direction * tidal * 22).toFixed(1)}deg) scale(${scaleX.toFixed(3)}, ${scaleY.toFixed(3)})`;
 
                     fragments.forEach((fragment, fragmentIndex) => {
@@ -1857,15 +2110,12 @@
                         fragment.style.opacity = `${Math.max(0, flare * (1 - progress * 0.7))}`;
                     });
 
-                    if (!flashed && progress >= 0.97) {
-                        flashed = true;
-                        triggerHorizonFlash();
-                    }
                     if (progress < 1) {
                         requestAnimationFrame(renderInfall);
                     } else {
                         card.remove();
                         fragments.forEach((fragment) => fragment.remove());
+                        onComplete?.();
                     }
                 }
                 requestAnimationFrame(renderInfall);
@@ -1887,20 +2137,29 @@
                 window.setTimeout(() => feedback.remove(), 1550);
             }
 
-            window.blackHoleHost?.onInfall(({ names, clientX, clientY }) => {
+            window.blackHoleHost?.onInfall(({ id, names, clientX, clientY }) => {
                 const hasPreviewCapture = Boolean(dragState);
+                const secondaryNames = names.slice(hasPreviewCapture ? 1 : 0);
+                activeInfall = {
+                    id,
+                    primaryDone: !hasPreviewCapture,
+                    secondaryPending: secondaryNames.length,
+                    vortexStarted: false,
+                };
                 if (dragState) {
-                    beginCapture(performance.now());
+                    beginCapture(performance.now(), getBlackHoleGeometry(), id);
                     ensureDragLoop();
                 }
-                names.slice(hasPreviewCapture ? 1 : 0).forEach((name, index) => {
+                secondaryNames.forEach((name, index) => {
                     animateInfall(
                         { name },
                         index,
                         (clientX || canvas.clientWidth / 2) + index * 12,
                         (clientY || canvas.clientHeight / 2) + index * 9,
+                        () => markSecondaryVisualComplete(id),
                     );
                 });
+                finishVisualInfallIfReady();
             });
             window.blackHoleHost?.onRecycled((name) => {
                 showRecycleFeedback(`已回收 ${name}`, '#fff6df');
