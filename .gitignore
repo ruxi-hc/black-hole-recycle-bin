@@ -1,0 +1,7 @@
+node_modules/
+dist/
+
+# Portable build artifacts
+*.exe
+build/portable/BlackHole-RecycleBin.zip
+build/portable/BlackHole-RecycleBin-Portable.sed

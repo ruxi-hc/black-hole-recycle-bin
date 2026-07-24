@@ -1,0 +1,1919 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gargantua 黑洞效果（带时间性抗锯齿）</title>
+    <style>
+        html, body {
+            overflow: hidden;
+            background: transparent;
+            height: 100vh;
+            margin: 0;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #glCanvas {
+            cursor: grab;
+        }
+        #glCanvas:active {
+            cursor: grabbing;
+        }
+        #inner-ring {
+            position: fixed;
+            inset: 0;
+            z-index: 2;
+            pointer-events: none;
+        }
+        #infall-layer {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+        }
+        .infall-card {
+            position: absolute;
+            width: 82px;
+            height: 25px;
+            box-sizing: border-box;
+            overflow: hidden;
+            padding: 5px 6px;
+            border: 1px solid rgba(255, 247, 223, 0.95);
+            border-radius: 3px;
+            background: rgba(6, 8, 10, 0.9);
+            box-shadow: 0 0 13px rgba(255, 235, 190, 0.85);
+            color: #fff8e8;
+            font: 10px/13px "Microsoft YaHei", sans-serif;
+            text-align: center;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            will-change: transform, opacity, filter;
+            transform-origin: center;
+            transform: translate(-50%, -50%);
+        }
+        .matter-fragment {
+            position: absolute;
+            z-index: 3;
+            width: 3px;
+            height: 3px;
+            border-radius: 50%;
+            background: #fff3d6;
+            box-shadow: 0 0 5px 1px rgba(255, 232, 180, 0.9);
+            pointer-events: none;
+            will-change: transform, opacity;
+        }
+        .event-horizon-flash {
+            position: absolute;
+            z-index: 4;
+            left: 50%;
+            top: 50%;
+            width: 58px;
+            height: 16px;
+            border: 1px solid rgba(255, 250, 228, 0.9);
+            border-radius: 50%;
+            box-shadow: 0 0 13px 4px rgba(255, 229, 174, 0.74);
+            pointer-events: none;
+            transform: translate(-50%, -50%) rotate(-20deg);
+            animation: horizon-flash 640ms cubic-bezier(0.12, 0.78, 0.18, 1) forwards;
+        }
+        @keyframes horizon-flash {
+            0% { opacity: 0; transform: translate(-50%, -50%) rotate(-20deg) scale(2.7, 1.5); }
+            30% { opacity: 0.96; }
+            100% { opacity: 0; transform: translate(-50%, -50%) rotate(-20deg) scale(0.08, 0.14); }
+        }
+        .accretion-boost {
+            position: absolute;
+            z-index: 3;
+            left: 50%;
+            top: 50%;
+            width: 124px;
+            height: 22px;
+            border: 1px solid rgba(255, 244, 214, 0.72);
+            border-radius: 50%;
+            box-shadow: 0 0 11px 5px rgba(255, 229, 176, 0.7), inset 0 0 8px rgba(255, 249, 231, 0.58);
+            mix-blend-mode: screen;
+            pointer-events: none;
+            transform: translate(-50%, -50%) rotate(-20deg);
+            animation: accretion-boost 780ms cubic-bezier(0.13, 0.7, 0.2, 1) forwards;
+        }
+        @keyframes accretion-boost {
+            0% { opacity: 0; transform: translate(-50%, -50%) rotate(-20deg) scale(0.58, 0.66); }
+            28% { opacity: 0.94; }
+            100% { opacity: 0; transform: translate(-50%, -50%) rotate(-20deg) scale(1.12, 1.04); }
+        }
+        body.feeding::after {
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 249, 226, 0.95);
+            border-radius: 50%;
+            box-shadow: 0 0 26px 14px rgba(255, 235, 190, 0.72);
+            content: "";
+            pointer-events: none;
+            animation: swallow-pulse 0.72s cubic-bezier(0.12, 0.78, 0.18, 1) forwards;
+        }
+        @keyframes swallow-pulse {
+            0% { opacity: 0; transform: translate(-50%, -50%) scale(2.2); }
+            32% { opacity: 0.88; }
+            100% { opacity: 0; transform: translate(-50%, -50%) scale(0.12); }
+        }
+        #drag-proxy {
+            position: fixed;
+            inset: 0;
+            z-index: 4;
+            width: 100vw;
+            height: 100vh;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 75ms linear;
+        }
+        #drag-proxy.active { opacity: 1; }
+        .recycle-feedback {
+            position: absolute;
+            left: 50%;
+            top: 81%;
+            z-index: 5;
+            min-width: 72px;
+            max-width: 136px;
+            overflow: hidden;
+            padding: 3px 6px;
+            border: 1px solid rgba(255, 245, 220, 0.72);
+            border-radius: 2px;
+            background: rgba(8, 10, 12, 0.74);
+            color: #fff6df;
+            font: 9px/12px "Microsoft YaHei", sans-serif;
+            text-align: center;
+            text-overflow: ellipsis;
+            transform: translateX(-50%);
+            white-space: nowrap;
+        }
+        .controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            color: white;
+            border-radius: 5px;
+            z-index: 1000;
+        }
+        .controls label {
+            display: block;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls" hidden>
+        <label for="fpsLimit">最大帧率: <span id="fpsValue">60</span> FPS</label>
+        <input type="range" id="fpsLimit" min="10" max="60" step="5" value="60">
+        <label for="taaEnabled">
+            <input type="checkbox" id="taaEnabled" checked> 启用时间性抗锯齿(TAA)
+        </label>
+        <label for="jitterStrength">抖动强度: <span id="jitterValue">1.0</span></label>
+        <input type="range" id="jitterStrength" min="0" max="5" step="0.1" value="1.0">
+    </div>
+    <canvas id="glCanvas" width="480" height="302"></canvas>
+    <canvas id="inner-ring" aria-hidden="true"></canvas>
+    <div id="infall-layer"></div>
+    <canvas id="drag-proxy" aria-hidden="true"></canvas>
+    
+    <script>
+        // 顶点着色器源码
+        const vertexShaderSource = `#version 300 es
+            in vec4 a_position;
+            in vec2 a_texCoord;
+            
+            out vec2 v_texCoord;
+            
+            void main() {
+                gl_Position = a_position;
+                v_texCoord = a_texCoord;
+            }
+        `;
+        
+        // 片元着色器源码，从Shadertoy移植而来
+        const fragmentShaderSource = `#version 300 es
+            precision mediump float;
+            
+            // 从shadertoy移植所需的变量
+            uniform vec2 iResolution;
+            uniform float iTime;
+            uniform vec4 iMouse;
+            uniform sampler2D iChannel0;
+            uniform sampler2D iChannel1;
+            uniform sampler2D previousFrame; // 上一帧的结果
+            uniform vec2 jitterOffset;       // 时间性抗锯齿的抖动偏移
+            uniform bool useTAA;             // 是否启用TAA
+            uniform float blendFactor;       // 当前帧与上一帧的混合因子
+            
+            // 相机旋转参数
+            uniform float cameraRotX;
+            uniform float cameraRotY;
+            
+            /*  
+            Main render. 
+            
+            Temporal AA for a smooth image. Temporal accumulation is disabled while moving the view to prevent ghosting.
+            */
+
+                #define ITERATIONS 200          //Increase for less grainy result
+            #define TEMPORAL_AA             //Enable temporal anti-aliasing
+
+            const vec3 MainColor = vec3(1.0);
+
+            //noise code by iq
+            float noise( in vec3 x )
+            {
+                vec3 p = floor(x);
+                vec3 f = fract(x);
+                f = f*f*(3.0-2.0*f);
+                vec2 uv = (p.xy+vec2(37.0,17.0)*p.z) + f.xy;
+                vec2 rg = textureLod( iChannel0, (uv+ 0.5)/256.0, 0.0 ).yx;
+                return -1.0+2.0*mix( rg.x, rg.y, f.z );
+            }
+
+            float saturate(float x)
+            {
+                return clamp(x, 0.0, 1.0);
+            }
+
+            vec3 saturate(vec3 x)
+            {
+                return clamp(x, vec3(0.0), vec3(1.0));
+            }
+
+            float rand(vec2 coord)
+            {
+                return saturate(fract(sin(dot(coord, vec2(12.9898, 78.223))) * (43758.5453)));
+            }
+
+            float pcurve( float x, float a, float b )
+            {
+                float k = pow(a+b,a+b) / (pow(a,a)*pow(b,b));
+                return k * pow( x, a ) * pow( 1.0-x, b );
+            }
+
+            const float pi = 3.14159265;
+
+            float atan2(float y, float x)
+            {
+                if (x > 0.0)
+                {
+                    return atan(y / x);
+                }
+                else if (x == 0.0)
+                {
+                    if (y > 0.0)
+                    {
+                        return pi / 2.0;
+                    }
+                    else if (y < 0.0)
+                    {
+                        return -(pi / 2.0);
+                    }
+                    else
+                    {
+                        return 0.0;
+                    }
+                }
+                else //(x < 0.0)
+                {
+                    if (y >= 0.0)
+                    {
+                        return atan(y / x) + pi;
+                    }
+                    else
+                    {
+                        return atan(y / x) - pi;
+                    }
+                }
+            }
+
+            float sdTorus(vec3 p, vec2 t)
+            {
+                vec2 q = vec2(length(p.xz) - t.x, p.y);
+                return length(q)-t.y;
+            }
+
+            float sdSphere(vec3 p, float r)
+            {
+            return length(p)-r;
+            }
+
+            void Haze(inout vec3 color, vec3 pos, float alpha)
+            {
+                vec2 t = vec2(1.0, 0.01);
+
+                float torusDist = length(sdTorus(pos + vec3(0.0, -0.05, 0.0), t));
+
+                float bloomDisc = 1.0 / (pow(torusDist, 2.0) + 0.001);
+                vec3 col = MainColor;
+                bloomDisc *= length(pos) < 0.5 ? 0.0 : 1.0;
+
+                color += col * bloomDisc * (2.9 / float(ITERATIONS)) * (1.0 - alpha * 1.0);
+            }
+
+            // 计算两点连线与 xz 平面的交点
+            vec3 intersectionWithXZPlane(vec3 pos, vec3 pre_pos) {
+                // 检查两点是否都在 xz 平面上或者连线平行于 xz 平面
+                if (pos.y == pre_pos.y) {
+                    return vec3(0.0); // 返回零向量表示无有效交点
+                }
+                // 计算参数 t
+                float t = -pre_pos.y / (pos.y - pre_pos.y);
+                // 计算交点的 x 和 z 坐标，y 坐标为 0
+                return vec3(
+                    pre_pos.x + t * (pos.x - pre_pos.x),
+                    0.0,
+                    pre_pos.z + t * (pos.z - pre_pos.z)
+                );
+            } 
+
+            void GasDisc(inout vec3 color, inout float alpha, vec3 pos, vec3 pre_pos)
+            {
+                vec3 discNormal = normalize(vec3(0.0, 1.0, 0.0));
+                
+                vec3 origin = vec3(0.0, 0.0, 0.0);
+                float discRadius = 3.2;
+                float discWidth = 5.3;
+                float discInner = discRadius - discWidth * 0.5;
+                float discOuter = discRadius + discWidth * 0.5;
+                float discThickness = 0.1;
+
+                
+                // 检测射线是否穿过吸积盘平面
+                if (pos.y * pre_pos.y < 0.0) {
+                    vec3 inter_pos = intersectionWithXZPlane(pos, pre_pos);
+                    pos = inter_pos;
+                }
+                else if (pos.y == 0.0) {
+                    pos = pos;
+                }
+                else {
+                //return;
+                }
+                
+                float distFromCenter = length(vec3(pos.x, 0.0, pos.z));
+                float distFromDisc = pos.y;
+                float prevDistFromDisc = pre_pos.y;
+                
+                float radialGradient = 1.0 - saturate((distFromCenter - discInner) / discWidth * 0.5);
+
+                float coverage = pcurve(radialGradient, 4.0, 0.9);
+
+                discThickness *= radialGradient;
+                coverage *= saturate(1.0 - abs(distFromDisc) / discThickness);
+
+                vec3 dustColorLit = MainColor;
+                vec3 dustColorDark = vec3(0.0, 0.0, 0.0);
+
+                float dustGlow = 1.0 / (pow(1.0 - radialGradient, 2.0) * 290.0 + 0.002);
+                vec3 dustColor = dustColorLit * dustGlow * 8.2;
+
+                coverage = saturate(coverage * 0.7);
+
+
+                float fade = pow((abs(distFromCenter - discInner) + 0.4), 4.0) * 0.04;
+                float bloomFactor = 1.0 / (pow(distFromDisc, 2.0) * 40.0 + fade + 0.00002);
+                vec3 b = dustColorLit * pow(bloomFactor, 1.5);
+                
+                b *= mix(vec3(1.7, 1.1, 1.0), vec3(0.5, 0.6, 1.0), vec3(pow(radialGradient, 2.0)));
+                b *= mix(vec3(1.7, 0.5, 0.1), vec3(1.0), vec3(pow(radialGradient, 0.5)));
+
+                dustColor = mix(dustColor, b * 150.0, saturate(1.0 - coverage * 1.0));
+                coverage = saturate(coverage + bloomFactor * bloomFactor * 0.1);
+                
+                if (coverage < 0.01)
+                {
+                    return;   
+                }
+                
+                
+                vec3 radialCoords;
+                radialCoords.x = distFromCenter * 1.5 + 0.55;
+                radialCoords.y = atan2(-pos.x, -pos.z) * 1.5;
+                radialCoords.z = distFromDisc * 1.5;
+
+                radialCoords *= 0.95;
+                
+                float speed = 0.0;
+                
+                radialCoords.y += iTime * 0.42;
+                
+                float noise1 = 1.0;
+                vec3 rc = radialCoords + 0.0;               rc.y += iTime * speed;
+                noise1 *= noise(rc * 3.0) * 0.5 + 0.5;      rc.y -= iTime * speed;
+                noise1 *= noise(rc * 6.0) * 0.5 + 0.5;      rc.y += iTime * speed;
+                noise1 *= noise(rc * 12.0) * 0.5 + 0.5;     rc.y -= iTime * speed;
+                noise1 *= noise(rc * 24.0) * 0.5 + 0.5;     rc.y += iTime * speed;
+
+                float noise2 = 2.0;
+                rc = radialCoords + 30.0;
+                noise2 *= noise(rc * 3.0) * 0.5 + 0.5;      rc.y += iTime * speed;
+                noise2 *= noise(rc * 6.0) * 0.5 + 0.5;      rc.y -= iTime * speed;
+                noise2 *= noise(rc * 12.0) * 0.5 + 0.5;     rc.y += iTime * speed;
+                noise2 *= noise(rc * 24.0) * 0.5 + 0.5;     rc.y -= iTime * speed;
+                noise2 *= noise(rc * 48.0) * 0.5 + 0.5;     rc.y += iTime * speed;
+                noise2 *= noise(rc * 92.0) * 0.5 + 0.5;     rc.y -= iTime * speed;
+
+                dustColor *= noise1 * 0.998 + 0.002;
+                coverage *= noise2;
+                
+                
+                
+                dustColor *= pow(texture(iChannel1, radialCoords.yx * vec2(0.15, 0.27)).rgb, vec3(2.0)) * 4.0;
+
+                coverage = saturate(coverage * 1200.0 / float(ITERATIONS));
+                dustColor = max(vec3(0.0), dustColor);
+
+                coverage *= pcurve(radialGradient, 4.0, 0.9);
+
+                color = (1.0 - alpha) * dustColor * coverage + color;
+
+                alpha = (1.0 - alpha) * coverage + alpha;
+            }
+
+
+            vec3 rotate(vec3 p, float x, float y, float z)
+            {
+                mat3 matx = mat3(1.0, 0.0, 0.0,
+                                0.0, cos(x), sin(x),
+                                0.0, -sin(x), cos(x));
+
+                mat3 maty = mat3(cos(y), 0.0, -sin(y),
+                                0.0, 1.0, 0.0,
+                                sin(y), 0.0, cos(y));
+
+                mat3 matz = mat3(cos(z), sin(z), 0.0,
+                                -sin(z), cos(z), 0.0,
+                                0.0, 0.0, 1.0);
+
+                p = matx * p;
+                p = matz * p;
+                p = maty * p;
+
+                return p;
+            }
+
+            void RotateCamera(inout vec3 eyevec, inout vec3 eyepos)
+            {
+                // 使用uniform传入的摄像机旋转变量
+                vec3 angle = vec3(cameraRotX, cameraRotY, -0.45);
+
+                eyevec = rotate(eyevec, angle.x, angle.y, angle.z);
+                eyepos = rotate(eyepos, angle.x, angle.y, angle.z);
+            }
+
+            void WarpSpace(inout vec3 eyevec, inout vec3 raypos)
+            {
+                vec3 origin = vec3(0.0, 0.0, 0.0);
+
+                float singularityDist = distance(raypos, origin);
+                float warpFactor = 1.0 / (pow(singularityDist, 2.0) + 0.000001);
+
+                vec3 singularityVector = normalize(origin - raypos);
+                
+                float warpAmount = 5.0;
+
+                eyevec = normalize(eyevec + singularityVector * warpFactor * warpAmount / float(ITERATIONS));
+            }
+
+
+            void mainImage( out vec4 fragColor, in vec2 fragCoord )
+            {
+                // 应用时间性抗锯齿的抖动偏移
+                vec2 uv = (fragCoord.xy + jitterOffset) / iResolution.xy;
+                
+                float aspect = iResolution.x / iResolution.y;
+
+                vec2 uveye = uv;
+                
+                vec3 eyevec = normalize(vec3((uveye * 2.0 - 1.0) * vec2(aspect, 1.0), 5.0));
+                vec3 eyepos = vec3(0.0, -0.0, -10.0);
+                
+                const float far = 15.0;
+
+                RotateCamera(eyevec, eyepos);
+
+                vec3 color = vec3(0.0, 0.0, 0.0);
+                
+                float dither = rand(uv) * 3.0;
+
+
+                float alpha = 0.;
+                vec3 raypos = eyepos + eyevec * dither * far / float(ITERATIONS);
+                vec3 pre_pos = raypos;
+                for (int i = 0; i < ITERATIONS; i++)
+                {        
+                    WarpSpace(eyevec, raypos);
+                    raypos += eyevec * far / float(ITERATIONS);
+                    GasDisc(color, alpha, raypos, pre_pos);
+                    Haze(color, raypos, alpha);
+                    pre_pos = raypos;
+                }
+                
+                color *= 0.03;
+                color = pow(color, vec3(1.5));
+                color = color / (1.0 + color);
+                color = pow(color, vec3(1.0 / 1.5));
+
+
+                color = mix(color, color * color * (3.0 - 2.0 * color), vec3(1.0));
+                color = pow(color, vec3(1.3, 1.20, 1.0));    
+
+                color = saturate(color * 1.01);
+
+                color = pow(color, vec3(0.7 / 2.2));
+                
+                // 如果启用TAA，混合当前帧与上一帧
+                if(useTAA) {
+                    // 获取上一帧在当前位置的颜色
+                    vec4 prevColor = texture(previousFrame, uv);
+                    // 历史帧与当前帧的混合
+                    color = mix(prevColor.rgb, color, blendFactor);
+                }
+
+                vec2 fadeUv = (uv - vec2(0.5)) * vec2(aspect, 1.0);
+                float radiusFromHorizon = length(fadeUv);
+                float lightAmount = max(color.r, max(color.g, color.b));
+                // Keep the black event horizon opaque, while the surrounding dark
+                // space stays transparent and only lensing/particle light remains.
+                float horizonAlpha = 1.0 - smoothstep(0.27, 0.43, radiusFromHorizon);
+                float lensAlpha = smoothstep(0.085, 0.38, lightAmount);
+                float edgeFade = 1.0 - smoothstep(0.68, 1.04, radiusFromHorizon);
+                float windowAlpha = max(horizonAlpha, lensAlpha) * edgeFade;
+                fragColor = vec4(color, windowAlpha);
+            }
+            
+            in vec2 v_texCoord;
+            out vec4 outColor;
+
+            // WebGL入口点
+            void main() {
+                vec2 fragCoord = v_texCoord * iResolution;
+                vec4 fragColor;
+                mainImage(fragColor, fragCoord);
+                outColor = fragColor;
+            }
+        `;
+        
+        // 纹理图片路径
+        const organicTextureUrl = "textures/organic_1_1024.jpg";
+        const noiseTextureUrl = "textures/rgba_noise_medium_256.png";
+        
+        // 跟踪鼠标位置
+        let mouseX = 0;
+        let mouseY = 0;
+        let mouseDown = false;
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+        let cameraRotationX = 0.05; // 初始X轴旋转
+        let cameraRotationY = 1.0;  // 初始Y轴旋转
+        
+        // TAA参数
+        let taaEnabled = true;      // 是否启用TAA
+        let jitterStrength = 1.0;   // 抖动强度
+        let jitterPhase = 0;        // 抖动相位
+        let lastCameraRotX = cameraRotationX;
+        let lastCameraRotY = cameraRotationY;
+        
+        // 主函数
+        async function main() {
+            const canvas = document.getElementById("glCanvas");
+            const gl = canvas.getContext("webgl2", {
+                alpha: true,
+                premultipliedAlpha: false,
+                preserveDrawingBuffer: false,
+            });
+            
+            if (!gl) {
+                console.error("无法初始化 WebGL。您的浏览器或机器可能不支持它。");
+                return;
+            }
+            
+            // 编译着色器程序
+            const shaderProgram = initShaderProgram(gl, vertexShaderSource, fragmentShaderSource);
+            
+            // 获取着色器中的属性和统一变量位置
+            const programInfo = {
+                program: shaderProgram,
+                attribLocations: {
+                    position: gl.getAttribLocation(shaderProgram, 'a_position'),
+                    texCoord: gl.getAttribLocation(shaderProgram, 'a_texCoord')
+                },
+                uniformLocations: {
+                    iResolution: gl.getUniformLocation(shaderProgram, 'iResolution'),
+                    iTime: gl.getUniformLocation(shaderProgram, 'iTime'),
+                    iMouse: gl.getUniformLocation(shaderProgram, 'iMouse'),
+                    iChannel0: gl.getUniformLocation(shaderProgram, 'iChannel0'),
+                    iChannel1: gl.getUniformLocation(shaderProgram, 'iChannel1'),
+                    previousFrame: gl.getUniformLocation(shaderProgram, 'previousFrame'),
+                    jitterOffset: gl.getUniformLocation(shaderProgram, 'jitterOffset'),
+                    useTAA: gl.getUniformLocation(shaderProgram, 'useTAA'),
+                    blendFactor: gl.getUniformLocation(shaderProgram, 'blendFactor'),
+                    cameraRotX: gl.getUniformLocation(shaderProgram, 'cameraRotX'),
+                    cameraRotY: gl.getUniformLocation(shaderProgram, 'cameraRotY')
+                },
+            };
+            
+            // 初始化缓冲区对象
+            const buffers = initBuffers(gl);
+            
+            try {
+                // 并行加载纹理
+                const [texture0, texture1] = await Promise.all([
+                    loadTexture(gl, noiseTextureUrl),
+                    loadTexture(gl, organicTextureUrl)
+                ]);
+                
+                const textures = {
+                    texture0,
+                    texture1
+                };
+
+                // Direct GPU output: the original project performs its lensing and gas-disc
+                // calculation in this shader. Avoiding its per-frame copy shader keeps the
+                // desktop overlay smooth while preserving the actual Gargantua render path.
+                const desktopStartTime = performance.now();
+                function renderDesktop(currentTime) {
+                    drawScene(
+                        gl,
+                        programInfo,
+                        buffers,
+                        textures,
+                        (currentTime - desktopStartTime) / 1000,
+                        null,
+                        null,
+                        { x: 0, y: 0 },
+                        1.0,
+                    );
+                    requestAnimationFrame(renderDesktop);
+                }
+                requestAnimationFrame(renderDesktop);
+                return;
+                
+                // 为TAA创建帧缓冲区
+                const framebuffers = createFramebuffers(gl, canvas.width, canvas.height);
+                
+                // 设置鼠标事件监听
+                setupMouseHandling(canvas);
+                
+                // 设置帧率和TAA控制
+                setupControls();
+                
+                // FPS显示器设置
+                const fpsDisplay = document.createElement('div');
+                fpsDisplay.style.cssText = 'position:absolute;top:10px;right:10px;color:white;background:rgba(0,0,0,0.5);padding:10px;border-radius:5px;z-index:1000;';
+                fpsDisplay.textContent = '实际FPS: 0';
+                document.body.appendChild(fpsDisplay);
+                
+                // 启动渲染循环
+                let startTime = performance.now();
+                let lastFrameTime = 0;           // 上一帧的时间戳
+                let MAX_FPS = 60;                // 设置最大FPS(可调整)
+                this.FRAME_MIN_TIME = 1000 / MAX_FPS; // 计算最小帧间隔(毫秒)
+                
+                // FPS计数器变量
+                let frameCount = 0;
+                let fpsUpdateTime = performance.now();
+                let displayFPS = 0;
+                
+                // 当前活动的缓冲区索引
+                let currentFramebuffer = 0;
+                
+                // 哈尔顿序列 - 用于TAA的抖动样本
+                const haltonSequence = (index, base) => {
+                    let result = 0;
+                    let f = 1 / base;
+                    let i = index;
+                    while(i > 0) {
+                        result = result + f * (i % base);
+                        i = Math.floor(i / base);
+                        f = f / base;
+                    }
+                    return result;
+                };
+                
+                function render(currentTime) {
+                    // 计算与上一帧的时间差
+                    const deltaTime = currentTime - lastFrameTime;
+                    // 如果时间间隔不够，跳过本次渲染
+                    if (deltaTime < this.FRAME_MIN_TIME) {
+                        requestAnimationFrame(render);
+                        return;
+                    }
+                    // 更新上一帧时间戳
+                    lastFrameTime = currentTime;
+                    
+                    // FPS计数
+                    frameCount++;
+                    if (currentTime - fpsUpdateTime > 1000) { // 每秒更新一次
+                        displayFPS = Math.round(frameCount * 1000 / (currentTime - fpsUpdateTime));
+                        fpsDisplay.textContent = `实际FPS: ${displayFPS}`;
+                        frameCount = 0;
+                        fpsUpdateTime = currentTime;
+                    }
+
+                    const elapsedTime = (currentTime - startTime) / 1000; // 转换为秒
+                    
+                    // 计算TAA抖动偏移
+                    let jitterX = 0, jitterY = 0;
+                    if (taaEnabled) {
+                        // 使用哈尔顿序列生成抖动样本
+                        jitterPhase = (jitterPhase + 1) % 16; // 使用16个样本点循环
+                        jitterX = (haltonSequence(jitterPhase + 1, 2) - 0.5) * jitterStrength;
+                        jitterY = (haltonSequence(jitterPhase + 1, 3) - 0.5) * jitterStrength;
+                    }
+                    
+                    // 检测相机是否移动
+                    const cameraMoving = Math.abs(lastCameraRotX - cameraRotationX) > 0.001 || 
+                                      Math.abs(lastCameraRotY - cameraRotationY) > 0.001;
+                    
+                    // 相机移动时更新混合系数，防止拖影
+                    const blendFactor = cameraMoving ? 1.0 : 0.2; // 相机移动时不使用历史帧
+                    
+                    // 记录本帧的相机位置用于下一帧
+                    lastCameraRotX = cameraRotationX;
+                    lastCameraRotY = cameraRotationY;
+                    
+                    // 绘制场景到当前帧缓冲区
+                    const targetFramebuffer = framebuffers[currentFramebuffer];
+                    const sourceFramebuffer = framebuffers[1 - currentFramebuffer];
+                    
+                    // 绘制场景
+                    drawScene(
+                        gl, 
+                        programInfo, 
+                        buffers, 
+                        textures, 
+                        elapsedTime, 
+                        targetFramebuffer, 
+                        sourceFramebuffer.texture,
+                        { x: jitterX, y: jitterY },
+                        blendFactor
+                    );
+                    
+                    // 将结果拷贝到画布
+                    copyToCanvas(gl, targetFramebuffer.texture);
+                    
+                    // 切换缓冲区
+                    currentFramebuffer = 1 - currentFramebuffer;
+                    
+                    // 请求下一帧
+                    requestAnimationFrame(render);
+                }
+                
+                // 开始渲染
+                requestAnimationFrame(render);
+                
+            } catch (error) {
+                console.error('加载纹理时发生错误:', error);
+            }
+        }
+        
+        // 初始化着色器程序
+        function initShaderProgram(gl, vsSource, fsSource) {
+            const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vsSource);
+            const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fsSource);
+            
+            // 创建着色器程序
+            const shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.attachShader(shaderProgram, fragmentShader);
+            gl.linkProgram(shaderProgram);
+            
+            // 检查着色器程序是否创建成功
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                console.error('无法初始化着色器程序: ' + gl.getProgramInfoLog(shaderProgram));
+                return null;
+            }
+            
+            return shaderProgram;
+        }
+        
+        // 加载着色器
+        function loadShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            
+            // 将源代码发送到着色器对象
+            gl.shaderSource(shader, source);
+            
+            // 编译着色器程序
+            gl.compileShader(shader);
+            
+            // 检查是否编译成功
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('编译着色器时发生错误: ' + gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            
+            return shader;
+        }
+        
+        // 创建TAA所需的帧缓冲区
+        function createFramebuffers(gl, width, height) {
+            const framebuffers = [];
+            
+            for (let i = 0; i < 2; i++) {
+                const fbo = gl.createFramebuffer();
+                gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+                
+                // 创建纹理作为颜色附件
+                const texture = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                
+                // 将纹理附加到帧缓冲区
+                gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+                
+                // 检查帧缓冲区是否完成
+                const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+                if (status !== gl.FRAMEBUFFER_COMPLETE) {
+                    console.error('帧缓冲区创建失败: ' + status);
+                }
+                
+                framebuffers.push({
+                    framebuffer: fbo,
+                    texture: texture
+                });
+            }
+            
+            // 解绑帧缓冲区
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.bindTexture(gl.TEXTURE_2D, null);
+            
+            return framebuffers;
+        }
+
+        // 初始化缓冲区对象
+        function initBuffers(gl) {
+            // 创建顶点位置缓冲区
+            const positionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            
+            // 创建一个覆盖整个画布的矩形（两个三角形）
+            const positions = [
+                -1.0, -1.0,
+                1.0, -1.0,
+                -1.0,  1.0,
+                1.0,  1.0,
+            ];
+            
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+            
+            // 创建纹理坐标缓冲区
+            const texCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+            
+            const texCoords = [
+                0.0, 0.0,
+                1.0, 0.0,
+                0.0, 1.0,
+                1.0, 1.0,
+            ];
+            
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(texCoords), gl.STATIC_DRAW);
+            
+            return {
+                position: positionBuffer,
+                texCoord: texCoordBuffer,
+            };
+        }
+
+        // 加载纹理
+        function loadTexture(gl, url) {
+            return new Promise((resolve, reject) => {
+                const texture = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                
+                // 填充纹理，直到图像加载完成
+                const level = 0;
+                const internalFormat = gl.RGBA;
+                const width = 1;
+                const height = 1;
+                const border = 0;
+                const srcFormat = gl.RGBA;
+                const srcType = gl.UNSIGNED_BYTE;
+                const pixel = new Uint8Array([0, 0, 255, 255]);  // 蓝色
+                gl.texImage2D(gl.TEXTURE_2D, level, internalFormat,
+                            width, height, border, srcFormat, srcType,
+                            pixel);
+                
+                const image = new Image();
+                image.onload = function() {
+                    gl.bindTexture(gl.TEXTURE_2D, texture);
+                    gl.texImage2D(gl.TEXTURE_2D, level, internalFormat,
+                                srcFormat, srcType, image);
+                    
+                    // 检查图像尺寸是否为2的幂
+                    if (isPowerOf2(image.width) && isPowerOf2(image.height)) {
+                        // 是2的幂，生成完整的mipmap
+                        gl.generateMipmap(gl.TEXTURE_2D);
+                    } else {
+                        // 不是2的幂，关闭mips并设置包裹模式为clamp
+                        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                    }
+                    
+                    resolve(texture);
+                };
+                image.onerror = function() {
+                    reject(new Error('加载纹理失败: ' + url));
+                };
+                image.src = url;
+            });
+        }
+
+        // 检查数字是否为2的幂
+        function isPowerOf2(value) {
+            return (value & (value - 1)) === 0;
+        }
+
+        // 绘制场景
+        function drawScene(gl, programInfo, buffers, textures, time, targetFramebuffer, previousFrameTexture, jitterOffset, blendFactor) {
+            // 设置视口和清除颜色
+            gl.bindFramebuffer(gl.FRAMEBUFFER, targetFramebuffer ? targetFramebuffer.framebuffer : null);
+            gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+            gl.clearColor(0.0, 0.0, 0.0, 0.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            
+            // 使用着色器程序
+            gl.useProgram(programInfo.program);
+            
+            // 设置顶点位置属性
+            {
+                const numComponents = 2;  // 每个顶点提取2个值
+                const type = gl.FLOAT;    // 缓冲区中的数据是32位浮点数
+                const normalize = false;  // 不要归一化
+                const stride = 0;         // 从一个顶点到下一个顶点有多少字节
+                const offset = 0;         // 缓冲区中从哪里开始
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
+                gl.vertexAttribPointer(
+                    programInfo.attribLocations.position,
+                    numComponents,
+                    type,
+                    normalize,
+                    stride,
+                    offset);
+                gl.enableVertexAttribArray(programInfo.attribLocations.position);
+            }
+            
+            // 设置纹理坐标属性
+            {
+                const numComponents = 2;
+                const type = gl.FLOAT;
+                const normalize = false;
+                const stride = 0;
+                const offset = 0;
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texCoord);
+                gl.vertexAttribPointer(
+                    programInfo.attribLocations.texCoord,
+                    numComponents,
+                    type,
+                    normalize,
+                    stride,
+                    offset);
+                gl.enableVertexAttribArray(programInfo.attribLocations.texCoord);
+            }
+            
+            // 设置uniforms
+            gl.uniform2f(programInfo.uniformLocations.iResolution, gl.canvas.width, gl.canvas.height);
+            gl.uniform1f(programInfo.uniformLocations.iTime, time);
+            gl.uniform4f(programInfo.uniformLocations.iMouse, mouseX, mouseY, mouseDown ? 1 : 0, 0);
+            
+            // 设置相机旋转
+            gl.uniform1f(programInfo.uniformLocations.cameraRotX, cameraRotationX);
+            gl.uniform1f(programInfo.uniformLocations.cameraRotY, cameraRotationY);
+            
+            // 设置TAA相关参数
+            gl.uniform2f(programInfo.uniformLocations.jitterOffset, jitterOffset.x, jitterOffset.y);
+            gl.uniform1i(programInfo.uniformLocations.useTAA, taaEnabled ? 1 : 0);
+            gl.uniform1f(programInfo.uniformLocations.blendFactor, blendFactor);
+            
+            // 设置纹理单元
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, textures.texture0);
+            gl.uniform1i(programInfo.uniformLocations.iChannel0, 0);
+            
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, textures.texture1);
+            gl.uniform1i(programInfo.uniformLocations.iChannel1, 1);
+            
+            // 绑定上一帧的纹理
+            if (previousFrameTexture) {
+                gl.activeTexture(gl.TEXTURE2);
+                gl.bindTexture(gl.TEXTURE_2D, previousFrameTexture);
+                gl.uniform1i(programInfo.uniformLocations.previousFrame, 2);
+            }
+            
+            // 绘制
+            const offset = 0;
+            const vertexCount = 4;
+            gl.drawArrays(gl.TRIANGLE_STRIP, offset, vertexCount);
+        }
+
+        // 将纹理拷贝到画布
+        function copyToCanvas(gl, texture) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.clearColor(0.0, 0.0, 0.0, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            
+            // 使用一个简单的着色器程序来绘制全屏四边形
+            const vsSource = `#version 300 es
+                in vec4 aPosition;
+                in vec2 aTexCoord;
+                out vec2 vTexCoord;
+                void main() {
+                    gl_Position = aPosition;
+                    vTexCoord = aTexCoord;
+                }
+            `;
+            
+            const fsSource = `#version 300 es
+                precision mediump float;
+                uniform sampler2D uTexture;
+                in vec2 vTexCoord;
+                out vec4 outColor;
+                void main() {
+                    outColor = texture(uTexture, vTexCoord);
+                }
+            `;
+            
+            const program = initShaderProgram(gl, vsSource, fsSource);
+            gl.useProgram(program);
+            
+            // 设置顶点属性
+            const positionAttributeLocation = gl.getAttribLocation(program, "aPosition");
+            const texCoordAttributeLocation = gl.getAttribLocation(program, "aTexCoord");
+            
+            // 创建和填充缓冲区
+            const positionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            const positions = [
+                -1.0, -1.0,
+                1.0, -1.0,
+                -1.0,  1.0,
+                1.0,  1.0,
+            ];
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(positionAttributeLocation);
+            gl.vertexAttribPointer(positionAttributeLocation, 2, gl.FLOAT, false, 0, 0);
+            
+            const texCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+            const texCoords = [
+                0.0, 0.0,
+                1.0, 0.0,
+                0.0, 1.0,
+                1.0, 1.0,
+            ];
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(texCoords), gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(texCoordAttributeLocation);
+            gl.vertexAttribPointer(texCoordAttributeLocation, 2, gl.FLOAT, false, 0, 0);
+            
+            // 设置纹理
+            const textureLocation = gl.getUniformLocation(program, "uTexture");
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.uniform1i(textureLocation, 0);
+            
+            // 绘制
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            
+            // 清理
+            gl.deleteBuffer(positionBuffer);
+            gl.deleteBuffer(texCoordBuffer);
+        }
+
+        // 设置鼠标事件处理
+        function setupMouseHandling(canvas) {
+            canvas.addEventListener('mousedown', function(e) {
+                mouseDown = true;
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+            });
+            
+            document.addEventListener('mouseup', function() {
+                mouseDown = false;
+            });
+            
+            document.addEventListener('mousemove', function(e) {
+                mouseX = e.clientX;
+                mouseY = e.clientY;
+                
+                if (mouseDown) {
+                    // 计算鼠标移动距离
+                    const dx = (e.clientX - lastMouseX) * 0.01;
+                    const dy = (e.clientY - lastMouseY) * 0.01;
+                    
+                    // 更新相机旋转
+                    cameraRotationY += dx;
+                    cameraRotationX += dy;
+                    
+                    // 限制X轴旋转范围，防止过度旋转
+                    cameraRotationX = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, cameraRotationX));
+                    
+                    lastMouseX = e.clientX;
+                    lastMouseY = e.clientY;
+                }
+            });
+            
+            // 触摸事件支持
+            canvas.addEventListener('touchstart', function(e) {
+                if (e.touches.length === 1) {
+                    mouseDown = true;
+                    lastMouseX = e.touches[0].clientX;
+                    lastMouseY = e.touches[0].clientY;
+                    e.preventDefault();
+                }
+            });
+            
+            document.addEventListener('touchend', function() {
+                mouseDown = false;
+            });
+            
+            document.addEventListener('touchmove', function(e) {
+                if (e.touches.length === 1 && mouseDown) {
+                    mouseX = e.touches[0].clientX;
+                    mouseY = e.touches[0].clientY;
+                    
+                    // 计算触摸移动距离
+                    const dx = (e.touches[0].clientX - lastMouseX) * 0.01;
+                    const dy = (e.touches[0].clientY - lastMouseY) * 0.01;
+                    
+                    // 更新相机旋转
+                    cameraRotationY += dx;
+                    cameraRotationX += dy;
+                    
+                    // 限制X轴旋转范围
+                    cameraRotationX = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, cameraRotationX));
+                    
+                    lastMouseX = e.touches[0].clientX;
+                    lastMouseY = e.touches[0].clientY;
+                    e.preventDefault();
+                }
+            });
+        }
+
+        // 设置控制UI
+        function setupControls() {
+            const fpsLimitSlider = document.getElementById('fpsLimit');
+            const fpsValueSpan = document.getElementById('fpsValue');
+            const taaEnabledCheckbox = document.getElementById('taaEnabled');
+            const jitterStrengthSlider = document.getElementById('jitterStrength');
+            const jitterValueSpan = document.getElementById('jitterValue');
+            
+            // 设置FPS限制
+            fpsLimitSlider.addEventListener('input', function() {
+                const value = parseInt(this.value);
+                fpsValueSpan.textContent = value;
+                MAX_FPS = value;
+                this.FRAME_MIN_TIME = 1000 / MAX_FPS;
+            });
+            
+            // 设置TAA开关
+            taaEnabledCheckbox.addEventListener('change', function() {
+                taaEnabled = this.checked;
+            });
+            
+            // 设置抖动强度
+            jitterStrengthSlider.addEventListener('input', function() {
+                const value = parseFloat(this.value);
+                jitterValueSpan.textContent = value.toFixed(1);
+                jitterStrength = value;
+            });
+        }
+
+        function setupInnerHalo() {
+            const haloCanvas = document.getElementById('inner-ring');
+            const haloContext = haloCanvas.getContext('2d');
+            const tau = Math.PI * 2;
+
+            function resizeHalo() {
+                const density = Math.min(window.devicePixelRatio || 1, 2);
+                const width = Math.max(1, Math.round(window.innerWidth * density));
+                const height = Math.max(1, Math.round(window.innerHeight * density));
+                if (haloCanvas.width !== width || haloCanvas.height !== height) {
+                    haloCanvas.width = width;
+                    haloCanvas.height = height;
+                }
+                haloContext.setTransform(density, 0, 0, density, 0, 0);
+            }
+
+            function renderHalo(now) {
+                resizeHalo();
+                haloContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+                const centerX = window.innerWidth / 2;
+                const centerY = window.innerHeight / 2;
+                const state = document.body.dataset.blackHoleState;
+                const capturing = state === 'capture';
+                const sensing = state === 'sensing';
+                const spin = now * (capturing ? 0.00245 : sensing ? 0.00162 : 0.00105);
+                const brightness = capturing ? 1 : sensing ? 0.72 : 0.46;
+
+                haloContext.save();
+                haloContext.translate(centerX, centerY);
+                haloContext.rotate(-0.34);
+                haloContext.scale(1, 0.42);
+                haloContext.lineCap = 'round';
+                for (let segment = 0; segment < 13; segment += 1) {
+                    const start = spin + segment * tau / 13;
+                    const arcLength = 0.23 + (segment % 4) * 0.035;
+                    const radius = 29 + (segment % 3 - 1) * 1.1;
+                    haloContext.globalAlpha = brightness * (segment % 5 === 0 ? 0.86 : 0.36);
+                    haloContext.strokeStyle = segment % 4 === 0 ? '#fffaf0' : '#ead9b4';
+                    haloContext.lineWidth = segment % 5 === 0 ? 1.35 : 0.72;
+                    haloContext.beginPath();
+                    haloContext.arc(0, 0, radius, start, start + arcLength);
+                    haloContext.stroke();
+                }
+                haloContext.restore();
+
+                haloContext.save();
+                haloContext.globalCompositeOperation = 'screen';
+                for (let particle = 0; particle < 8; particle += 1) {
+                    const angle = -spin * 1.35 + particle * tau / 8;
+                    const radius = 25 + (particle % 3) * 3;
+                    const x = centerX + Math.cos(angle) * radius;
+                    const y = centerY + Math.sin(angle) * radius * 0.43;
+                    haloContext.globalAlpha = brightness * (particle % 3 === 0 ? 0.72 : 0.28);
+                    haloContext.fillStyle = particle % 3 === 0 ? '#fff9e8' : '#e7d3aa';
+                    haloContext.beginPath();
+                    haloContext.arc(x, y, particle % 3 === 0 ? 1.15 : 0.68, 0, tau);
+                    haloContext.fill();
+                }
+                haloContext.restore();
+
+                requestAnimationFrame(renderHalo);
+            }
+
+            window.addEventListener('resize', resizeHalo);
+            requestAnimationFrame(renderHalo);
+        }
+
+        function setupDesktopInteractions() {
+            const canvas = document.getElementById('glCanvas');
+            const infallLayer = document.getElementById('infall-layer');
+            const dragProxy = document.getElementById('drag-proxy');
+            const dragContext = dragProxy.getContext('2d');
+            const fileSprite = document.createElement('canvas');
+            const spriteWidth = 66;
+            const spriteHeight = 72;
+            const meshColumns = 10;
+            const meshRows = 12;
+            fileSprite.width = spriteWidth;
+            fileSprite.height = spriteHeight;
+            const fileSpriteContext = fileSprite.getContext('2d');
+            let spriteName = '';
+            let dragState;
+            let dragAnimationFrame;
+            let completeStateTimer;
+            const InteractionState = Object.freeze({
+                NORMAL: 'normal',
+                SENSING: 'sensing',
+                CAPTURE: 'capture',
+                COMPLETE: 'complete',
+            });
+            let interactionState = InteractionState.NORMAL;
+            let movingWindow = false;
+            document.body.dataset.blackHoleState = InteractionState.NORMAL;
+
+            canvas.addEventListener('pointerdown', (event) => {
+                if (event.button !== 0 || !window.blackHoleHost) return;
+                movingWindow = true;
+                canvas.setPointerCapture(event.pointerId);
+                window.blackHoleHost.startWindowDrag({ x: event.screenX, y: event.screenY });
+            });
+
+            canvas.addEventListener('pointermove', (event) => {
+                if (movingWindow) window.blackHoleHost.moveWindow({ x: event.screenX, y: event.screenY });
+            });
+
+            const stopMovingWindow = () => {
+                if (!movingWindow) return;
+                movingWindow = false;
+                window.blackHoleHost.endWindowDrag();
+            };
+            canvas.addEventListener('pointerup', stopMovingWindow);
+            canvas.addEventListener('pointercancel', stopMovingWindow);
+
+            const containsFiles = (event) => Array.from(event.dataTransfer?.types || []).includes('Files');
+
+            function clamp(value, min, max) {
+                return Math.min(max, Math.max(min, value));
+            }
+
+            function lerp(from, to, amount) {
+                return from + (to - from) * amount;
+            }
+
+            function smoothstep(from, to, value) {
+                const t = clamp((value - from) / (to - from), 0, 1);
+                return t * t * (3 - 2 * t);
+            }
+
+            function setInteractionState(nextState) {
+                interactionState = nextState;
+                document.body.dataset.blackHoleState = nextState;
+            }
+
+            function getBlackHoleGeometry() {
+                return {
+                    coreX: canvas.clientWidth / 2,
+                    coreY: canvas.clientHeight / 2,
+                    lensRadius: Math.max(76, Math.min(canvas.clientWidth * 0.78, canvas.clientHeight * 1.12)),
+                    captureRadius: Math.max(28, Math.min(40, canvas.clientHeight * 0.25)),
+                    horizonRadius: Math.max(12, Math.min(18, canvas.clientHeight * 0.12)),
+                    diskAspect: 0.56,
+                };
+            }
+
+            function gravityField(x, y, geometry) {
+                const offsetX = geometry.coreX - x;
+                const offsetY = geometry.coreY - y;
+                const distance = Math.max(0.75, Math.hypot(offsetX, offsetY));
+                return {
+                    distance,
+                    directionX: offsetX / distance,
+                    directionY: offsetY / distance,
+                    strength: Math.pow(clamp(1 - distance / geometry.lensRadius, 0, 1), 1.32),
+                };
+            }
+
+            function shortenFileName(name, maxWidth) {
+                if (fileSpriteContext.measureText(name).width <= maxWidth) return name;
+                let shortened = name;
+                while (shortened.length > 1 && fileSpriteContext.measureText(`${shortened}...`).width > maxWidth) {
+                    shortened = shortened.slice(0, -1);
+                }
+                return `${shortened}...`;
+            }
+
+            function drawFileSprite(name) {
+                if (spriteName === name) return;
+                spriteName = name;
+                const context = fileSpriteContext;
+                const label = name || '文件';
+                context.clearRect(0, 0, spriteWidth, spriteHeight);
+
+                context.save();
+                context.shadowColor = 'rgba(255, 235, 190, 0.92)';
+                context.shadowBlur = 9;
+                context.fillStyle = 'rgba(248, 247, 240, 0.96)';
+                context.strokeStyle = 'rgba(255, 252, 239, 0.98)';
+                context.lineWidth = 1;
+                context.beginPath();
+                context.moveTo(16, 4);
+                context.lineTo(41, 4);
+                context.lineTo(50, 13);
+                context.lineTo(50, 49);
+                context.lineTo(16, 49);
+                context.closePath();
+                context.fill();
+                context.stroke();
+                context.shadowColor = 'transparent';
+                context.fillStyle = 'rgba(214, 210, 196, 0.98)';
+                context.beginPath();
+                context.moveTo(41, 4);
+                context.lineTo(41, 13);
+                context.lineTo(50, 13);
+                context.closePath();
+                context.fill();
+                context.strokeStyle = 'rgba(122, 117, 101, 0.75)';
+                context.beginPath();
+                context.moveTo(22, 24);
+                context.lineTo(44, 24);
+                context.moveTo(22, 29);
+                context.lineTo(43, 29);
+                context.moveTo(22, 34);
+                context.lineTo(38, 34);
+                context.stroke();
+                context.restore();
+
+                context.save();
+                context.fillStyle = '#fff9e9';
+                context.shadowColor = '#000000';
+                context.shadowBlur = 4;
+                context.font = '9px "Microsoft YaHei", sans-serif';
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                context.fillText(shortenFileName(label, 62), spriteWidth / 2, 62);
+                context.restore();
+            }
+
+            function prepareDragCanvas() {
+                const density = Math.min(window.devicePixelRatio || 1, 2);
+                const width = Math.max(1, Math.round(window.innerWidth * density));
+                const height = Math.max(1, Math.round(window.innerHeight * density));
+                if (dragProxy.width !== width || dragProxy.height !== height) {
+                    dragProxy.width = width;
+                    dragProxy.height = height;
+                }
+                dragContext.setTransform(density, 0, 0, density, 0, 0);
+                dragContext.imageSmoothingEnabled = true;
+            }
+
+            function clearDragProxy() {
+                prepareDragCanvas();
+                dragContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+            }
+
+            function drawInflowParticles(geometry, now, intensity, captured) {
+                const particleCount = captured ? 18 : 11;
+                const outerRadius = Math.min(geometry.lensRadius * 0.58, 98);
+                dragContext.save();
+                dragContext.globalCompositeOperation = 'screen';
+                for (let index = 0; index < particleCount; index += 1) {
+                    const cadence = 0.00024 * (0.78 + (index % 5) * 0.11) * (captured ? 1.9 : 1);
+                    const phase = (now * cadence + index * 0.173) % 1;
+                    const inward = Math.pow(phase, captured ? 0.64 : 1.12);
+                    const radius = geometry.horizonRadius * 1.2 + (outerRadius - geometry.horizonRadius) * (1 - inward);
+                    const angle = index * 2.399 + now * 0.00034 * (captured ? 1.7 : 0.78) + inward * 2.5;
+                    const x = geometry.coreX + Math.cos(angle) * radius;
+                    const y = geometry.coreY + Math.sin(angle) * radius * geometry.diskAspect;
+                    const size = 0.8 + inward * 1.8;
+                    dragContext.globalAlpha = intensity * (0.16 + inward * 0.55);
+                    dragContext.fillStyle = index % 3 === 0 ? '#fffaf0' : '#f4dfb7';
+                    dragContext.beginPath();
+                    dragContext.arc(x, y, size, 0, Math.PI * 2);
+                    dragContext.fill();
+                }
+                dragContext.restore();
+            }
+
+            function drawEventHorizonOccluder(geometry, opacity, inwardPull) {
+                if (opacity <= 0) return;
+                dragContext.save();
+                dragContext.globalAlpha = clamp(opacity, 0, 1);
+                dragContext.fillStyle = '#000000';
+                dragContext.beginPath();
+                dragContext.arc(
+                    geometry.coreX,
+                    geometry.coreY,
+                    geometry.horizonRadius * (1 + inwardPull * 0.46),
+                    0,
+                    Math.PI * 2,
+                );
+                dragContext.fill();
+                dragContext.restore();
+            }
+
+            // Based on GreenScreen410/singularity (MIT): a radial 1/r ray bend
+            // plus frame-dragging twist. Each mesh point follows its own ray.
+            function lensPoint(x, y, geometry, captureProgress) {
+                const offsetX = x - geometry.coreX;
+                const offsetY = y - geometry.coreY;
+                const distance = Math.max(0.75, Math.hypot(offsetX, offsetY));
+                const lensStrength = Math.pow(clamp(1 - distance / geometry.lensRadius, 0, 1), 1.32);
+                if (lensStrength < 0.004) return { x, y, opacity: 1 };
+
+                const angle = Math.atan2(offsetY, offsetX);
+                const inwardPull = Math.min(distance * 0.30, 15) * lensStrength;
+                const sourceRadius = Math.max(2, distance - inwardPull);
+                const unscaledDeflection = (7 + 780 / (distance + 18)) * lensStrength * (0.42 + lensStrength * 0.58);
+                const deflection = unscaledDeflection * (1 - captureProgress * 0.92);
+                const frameDrag = -(0.09 + 0.83 * lensStrength * lensStrength) * (lensStrength + captureProgress * 0.42);
+                const mappedRadius = sourceRadius + deflection;
+                const horizonFade = smoothstep(8, 18, distance);
+
+                return {
+                    x: geometry.coreX + Math.cos(angle + frameDrag) * mappedRadius,
+                    y: geometry.coreY + Math.sin(angle + frameDrag) * mappedRadius,
+                    opacity: 0.34 + horizonFade * 0.66,
+                };
+            }
+
+            function deformSpritePoint(point, geometry) {
+                const localX = point.x - spriteWidth / 2;
+                const localY = point.y - spriteHeight / 2;
+                const field = gravityField(dragState.x, dragState.y, geometry);
+                const captureProgress = dragState.captureProgress || 0;
+                const tidal = dragState.phase === InteractionState.CAPTURE
+                    ? 0.16 + Math.pow(captureProgress, 1.28) * 1.12
+                    : field.strength * 0.24;
+                const orientation = dragState.phase === InteractionState.CAPTURE
+                    ? dragState.orbitAngle + Math.PI / 2
+                    : Math.atan2(dragState.y - geometry.coreY, dragState.x - geometry.coreX) + Math.PI / 2 - field.strength * 0.32;
+                const massScale = dragState.phase === InteractionState.CAPTURE
+                    ? 1 - captureProgress * 0.46
+                    : 1;
+                const tangentialLength = (1 + tidal * 2.8) * massScale;
+                const radialCompression = Math.max(0.045, (1 - tidal * 0.72) * massScale);
+                const stretchedX = localX * tangentialLength;
+                const compressedY = localY * radialCompression;
+                const cosine = Math.cos(orientation);
+                const sine = Math.sin(orientation);
+
+                return {
+                    x: dragState.x + cosine * stretchedX - sine * compressedY,
+                    y: dragState.y + sine * stretchedX + cosine * compressedY,
+                };
+            }
+
+            function drawTextureTriangle(sourceA, sourceB, sourceC, destinationA, destinationB, destinationC, opacity) {
+                const sourceABX = sourceB.x - sourceA.x;
+                const sourceABY = sourceB.y - sourceA.y;
+                const sourceACX = sourceC.x - sourceA.x;
+                const sourceACY = sourceC.y - sourceA.y;
+                const determinant = sourceABX * sourceACY - sourceACX * sourceABY;
+                if (Math.abs(determinant) < 0.00001) return;
+
+                const destinationABX = destinationB.x - destinationA.x;
+                const destinationABY = destinationB.y - destinationA.y;
+                const destinationACX = destinationC.x - destinationA.x;
+                const destinationACY = destinationC.y - destinationA.y;
+                const a = (destinationABX * sourceACY - destinationACX * sourceABY) / determinant;
+                const b = (destinationABY * sourceACY - destinationACY * sourceABY) / determinant;
+                const c = (sourceABX * destinationACX - sourceACX * destinationABX) / determinant;
+                const d = (sourceABX * destinationACY - sourceACX * destinationABY) / determinant;
+                const e = destinationA.x - a * sourceA.x - c * sourceA.y;
+                const f = destinationA.y - b * sourceA.x - d * sourceA.y;
+
+                dragContext.save();
+                dragContext.globalAlpha = clamp(opacity, 0, 1);
+                dragContext.beginPath();
+                dragContext.moveTo(destinationA.x, destinationA.y);
+                dragContext.lineTo(destinationB.x, destinationB.y);
+                dragContext.lineTo(destinationC.x, destinationC.y);
+                dragContext.closePath();
+                dragContext.clip();
+                dragContext.transform(a, b, c, d, e, f);
+                dragContext.drawImage(fileSprite, 0, 0);
+                dragContext.restore();
+            }
+
+            function renderLensedDrag(now) {
+                if (!dragState) return;
+                prepareDragCanvas();
+                dragContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+
+                const geometry = getBlackHoleGeometry();
+                const field = gravityField(dragState.x, dragState.y, geometry);
+                const captureProgress = dragState.captureProgress || 0;
+                const visibleOpacity = (dragState.opacity ?? 1) * (dragState.backside ? 0.34 : 1);
+                const shouldDrawMesh = dragState.phase !== InteractionState.NORMAL || field.strength >= 0.004;
+                if (!shouldDrawMesh) {
+                    dragContext.globalAlpha = visibleOpacity;
+                    dragContext.drawImage(fileSprite, dragState.x - spriteWidth / 2, dragState.y - spriteHeight / 2);
+                    dragContext.globalAlpha = 1;
+                    return;
+                }
+
+                drawInflowParticles(geometry, now, Math.max(field.strength, captureProgress * 0.88), dragState.phase === InteractionState.CAPTURE);
+                const cellWidth = spriteWidth / meshColumns;
+                const cellHeight = spriteHeight / meshRows;
+                for (let row = 0; row < meshRows; row += 1) {
+                    for (let column = 0; column < meshColumns; column += 1) {
+                        const left = column * cellWidth;
+                        const top = row * cellHeight;
+                        const right = left + cellWidth;
+                        const bottom = top + cellHeight;
+                        const sourceA = { x: left, y: top };
+                        const sourceB = { x: right, y: top };
+                        const sourceC = { x: right, y: bottom };
+                        const sourceD = { x: left, y: bottom };
+                        const toScreen = (point) => {
+                            const deformed = deformSpritePoint(point, geometry);
+                            return lensPoint(deformed.x, deformed.y, geometry, captureProgress);
+                        };
+                        const destinationA = toScreen(sourceA);
+                        const destinationB = toScreen(sourceB);
+                        const destinationC = toScreen(sourceC);
+                        const destinationD = toScreen(sourceD);
+                        drawTextureTriangle(sourceA, sourceB, sourceC, destinationA, destinationB, destinationC,
+                            visibleOpacity * (destinationA.opacity + destinationB.opacity + destinationC.opacity) / 3);
+                        drawTextureTriangle(sourceA, sourceC, sourceD, destinationA, destinationC, destinationD,
+                            visibleOpacity * (destinationA.opacity + destinationC.opacity + destinationD.opacity) / 3);
+                    }
+                }
+                if (dragState.phase === InteractionState.CAPTURE) {
+                    drawEventHorizonOccluder(
+                        geometry,
+                        dragState.backside ? 0.92 : dragState.horizonMask || 0,
+                        dragState.horizonMask || 0,
+                    );
+                }
+            }
+
+            function beginCapture(now, geometry = getBlackHoleGeometry()) {
+                if (!dragState || dragState.phase === InteractionState.CAPTURE) return;
+                const offsetX = dragState.x - geometry.coreX;
+                const offsetY = dragState.y - geometry.coreY;
+                dragState.phase = InteractionState.CAPTURE;
+                dragState.captureStartedAt = now;
+                dragState.captureProgress = 0;
+                dragState.captureRadius = Math.max(geometry.captureRadius * 1.2, Math.hypot(offsetX, offsetY / geometry.diskAspect));
+                dragState.orbitRadius = clamp(
+                    dragState.captureRadius * 0.60,
+                    geometry.captureRadius * 1.15,
+                    geometry.captureRadius * 2.10,
+                );
+                dragState.captureAngle = Math.atan2(offsetY / geometry.diskAspect, offsetX);
+                dragState.orbitAngle = dragState.captureAngle;
+                dragState.captureDirection = offsetX >= 0 ? -1 : 1;
+                dragState.backside = false;
+                dragState.horizonMask = 0;
+                dragState.vx = 0;
+                dragState.vy = 0;
+                setInteractionState(InteractionState.CAPTURE);
+            }
+
+            function finishCapture() {
+                if (!dragState) return;
+                dragState = undefined;
+                dragProxy.classList.remove('active');
+                clearDragProxy();
+                setInteractionState(InteractionState.COMPLETE);
+                triggerHorizonFlash();
+                window.clearTimeout(completeStateTimer);
+                completeStateTimer = window.setTimeout(() => setInteractionState(InteractionState.NORMAL), 820);
+            }
+
+            function updateDragPhysics(now) {
+                if (!dragState) return;
+                const state = dragState;
+                const geometry = getBlackHoleGeometry();
+                const elapsed = Math.max(0, now - (state.lastFrame || now));
+                const deltaTime = Math.min(0.04, elapsed / 1000 || 0.016);
+                state.lastFrame = now;
+
+                if (state.phase === InteractionState.CAPTURE) {
+                    const progress = clamp((now - state.captureStartedAt) / 1460, 0, 1);
+                    const orbitStage = clamp(progress / 0.58, 0, 1);
+                    const plungeStage = clamp((progress - 0.58) / 0.42, 0, 1);
+                    const settling = smoothstep(0.04, 0.46, progress);
+                    const radius = progress < 0.58
+                        ? lerp(state.captureRadius, state.orbitRadius, settling)
+                        : Math.max(
+                            geometry.horizonRadius * 0.18,
+                            state.orbitRadius * Math.pow(1 - plungeStage, 0.42),
+                        );
+                    const turns = progress < 0.58
+                        ? 0.10 + Math.pow(orbitStage, 1.05) * 0.82
+                        : 0.92 + Math.pow(plungeStage, 1.72) * 0.50;
+                    state.orbitAngle = state.captureAngle + state.captureDirection * turns * Math.PI * 2;
+                    state.x = geometry.coreX + Math.cos(state.orbitAngle) * radius;
+                    state.y = geometry.coreY + Math.sin(state.orbitAngle) * radius * geometry.diskAspect;
+                    state.captureProgress = progress;
+                    state.backside = progress < 0.88 && Math.sin(state.orbitAngle) < -0.22;
+                    state.horizonMask = smoothstep(0.84, 1, progress);
+                    state.opacity = 1;
+                    if (progress >= 1) finishCapture();
+                    return;
+                }
+
+                const targetField = gravityField(state.targetX, state.targetY, geometry);
+                if (state.phase === InteractionState.NORMAL && targetField.strength > 0.025) {
+                    state.phase = InteractionState.SENSING;
+                    setInteractionState(InteractionState.SENSING);
+                }
+
+                if (state.phase === InteractionState.NORMAL) {
+                    const follow = Math.min(1, deltaTime * 26);
+                    state.x += (state.targetX - state.x) * follow;
+                    state.y += (state.targetY - state.y) * follow;
+                    return;
+                }
+
+                const field = gravityField(state.x, state.y, geometry);
+                const releasing = targetField.strength < 0.018;
+                const cursorPull = (64 + targetField.strength * 118) * (releasing ? 4.6 : 1);
+                const gravityAcceleration = (92 + 4200 / (field.distance + 26))
+                    * Math.pow(Math.max(field.strength, 0.06), 1.18)
+                    * (releasing ? 0.34 : 1);
+                state.vx += (state.targetX - state.x) * cursorPull * deltaTime;
+                state.vy += (state.targetY - state.y) * cursorPull * deltaTime;
+                state.vx += (field.directionX - field.directionY * 0.19) * gravityAcceleration * deltaTime;
+                state.vy += (field.directionY + field.directionX * 0.19) * gravityAcceleration * deltaTime;
+                const damping = Math.exp(-(5.7 - field.strength * 1.4) * deltaTime);
+                state.vx *= damping;
+                state.vy *= damping;
+                const speed = Math.hypot(state.vx, state.vy);
+                if (speed > 460) {
+                    state.vx = state.vx / speed * 460;
+                    state.vy = state.vy / speed * 460;
+                }
+                state.x += state.vx * deltaTime;
+                state.y += state.vy * deltaTime;
+                const updatedField = gravityField(state.x, state.y, geometry);
+                if (releasing && updatedField.strength < 0.018) {
+                    state.phase = InteractionState.NORMAL;
+                    state.vx = 0;
+                    state.vy = 0;
+                    setInteractionState(InteractionState.NORMAL);
+                }
+            }
+
+            function runDragFrame(now) {
+                dragAnimationFrame = undefined;
+                updateDragPhysics(now);
+                if (!dragState) return;
+                renderLensedDrag(now);
+                dragAnimationFrame = requestAnimationFrame(runDragFrame);
+            }
+
+            function ensureDragLoop() {
+                if (!dragAnimationFrame) dragAnimationFrame = requestAnimationFrame(runDragFrame);
+            }
+
+            function clearGravity(force = false) {
+                if (dragState?.phase === InteractionState.CAPTURE && !force) return;
+                dragState = undefined;
+                if (dragAnimationFrame) cancelAnimationFrame(dragAnimationFrame);
+                dragAnimationFrame = undefined;
+                dragProxy.classList.remove('active');
+                clearDragProxy();
+                if (interactionState !== InteractionState.COMPLETE) setInteractionState(InteractionState.NORMAL);
+            }
+
+            function updateGravity(event) {
+                if (!containsFiles(event)) return;
+                event.preventDefault();
+                const firstFile = event.dataTransfer.files?.[0];
+                const fileName = firstFile?.name || '文件';
+                const now = performance.now();
+
+                drawFileSprite(fileName);
+                if (!dragState) {
+                    dragState = {
+                        phase: InteractionState.NORMAL,
+                        x: event.clientX,
+                        y: event.clientY,
+                        targetX: event.clientX,
+                        targetY: event.clientY,
+                        vx: 0,
+                        vy: 0,
+                        opacity: 1,
+                        fileName,
+                        lastFrame: now,
+                    };
+                    setInteractionState(InteractionState.NORMAL);
+                } else if (dragState.phase !== InteractionState.CAPTURE) {
+                    dragState.targetX = event.clientX;
+                    dragState.targetY = event.clientY;
+                }
+                dragProxy.classList.add('active');
+                ensureDragLoop();
+            }
+
+            window.addEventListener('dragenter', updateGravity);
+            window.addEventListener('dragover', updateGravity);
+            window.addEventListener('resize', () => {
+                if (dragState) ensureDragLoop();
+                else clearDragProxy();
+            });
+            window.addEventListener('dragleave', (event) => {
+                if (!event.relatedTarget || !document.documentElement.contains(event.relatedTarget)) clearGravity();
+            });
+
+            function triggerHorizonFlash() {
+                const flash = document.createElement('div');
+                const boost = document.createElement('div');
+                flash.className = 'event-horizon-flash';
+                boost.className = 'accretion-boost';
+                infallLayer.appendChild(flash);
+                infallLayer.appendChild(boost);
+                document.body.classList.add('feeding');
+                window.setTimeout(() => {
+                    flash.remove();
+                    boost.remove();
+                    document.body.classList.remove('feeding');
+                }, 820);
+            }
+
+            function animateInfall(file, index, startX, startY) {
+                const card = document.createElement('div');
+                const fragments = Array.from({ length: 11 }, () => {
+                    const fragment = document.createElement('div');
+                    fragment.className = 'matter-fragment';
+                    infallLayer.appendChild(fragment);
+                    return fragment;
+                });
+                const coreX = canvas.clientWidth / 2;
+                const coreY = canvas.clientHeight / 2;
+                const verticalCompression = 0.58;
+                const startRadius = Math.max(7, Math.hypot(startX - coreX, (startY - coreY) / verticalCompression));
+                const startAngle = Math.atan2((startY - coreY) / verticalCompression, startX - coreX);
+                const direction = startX < coreX ? -1 : 1;
+                const startedAt = performance.now() + index * 90;
+                const duration = 1240;
+                let flashed = false;
+
+                card.className = 'infall-card';
+                card.textContent = file.name;
+                card.style.transition = 'none';
+                infallLayer.appendChild(card);
+
+                function pointOnSpiral(progress) {
+                    const radialProgress = Math.pow(progress, 1.65);
+                    const radius = Math.max(1.4, startRadius * (1 - radialProgress));
+                    const angle = startAngle + direction * (0.18 + Math.pow(progress, 2.05) * 2.86) * Math.PI * 2;
+                    return {
+                        x: coreX + Math.cos(angle) * radius,
+                        y: coreY + Math.sin(angle) * radius * verticalCompression,
+                        angle,
+                    };
+                }
+
+                function renderInfall(now) {
+                    const progress = Math.max(0, Math.min(1, (now - startedAt) / duration));
+                    const point = pointOnSpiral(progress);
+                    const tidal = smoothstep(0.16, 0.88, progress);
+                    const horizonCollapse = smoothstep(0.79, 1, progress);
+                    const scaleX = (1 + tidal * 1.92) * (1 - horizonCollapse * 0.86);
+                    const scaleY = (1 - tidal * 0.71) * (1 - horizonCollapse * 0.62);
+                    const rotation = point.angle * 180 / Math.PI + direction * Math.pow(progress, 2.05) * 470;
+                    const opacity = 1 - smoothstep(0.72, 0.99, progress);
+
+                    card.style.left = `${point.x}px`;
+                    card.style.top = `${point.y}px`;
+                    card.style.opacity = opacity.toFixed(3);
+                    card.style.filter = `blur(${(progress * 2.1).toFixed(2)}px) brightness(${(1 + progress * 0.85).toFixed(2)})`;
+                    card.style.transform = `translate(-50%, -50%) rotate(${rotation.toFixed(1)}deg) skewX(${(direction * tidal * 22).toFixed(1)}deg) scale(${scaleX.toFixed(3)}, ${scaleY.toFixed(3)})`;
+
+                    fragments.forEach((fragment, fragmentIndex) => {
+                        const trailProgress = Math.max(0, progress - fragmentIndex * 0.047);
+                        const trailPoint = pointOnSpiral(trailProgress);
+                        const flare = 1 - fragmentIndex / fragments.length;
+                        const turbulence = Math.sin(fragmentIndex * 2.17 + progress * 19) * (1 - progress) * 8;
+                        const tangentX = -Math.sin(trailPoint.angle) * turbulence;
+                        const tangentY = Math.cos(trailPoint.angle) * turbulence * verticalCompression;
+                        const size = 1.3 + flare * 2.3 * (1 - progress * 0.55);
+                        fragment.style.left = `${trailPoint.x + tangentX}px`;
+                        fragment.style.top = `${trailPoint.y + tangentY}px`;
+                        fragment.style.width = `${size}px`;
+                        fragment.style.height = `${size}px`;
+                        fragment.style.opacity = `${Math.max(0, flare * (1 - progress * 0.7))}`;
+                    });
+
+                    if (!flashed && progress >= 0.97) {
+                        flashed = true;
+                        triggerHorizonFlash();
+                    }
+                    if (progress < 1) {
+                        requestAnimationFrame(renderInfall);
+                    } else {
+                        card.remove();
+                        fragments.forEach((fragment) => fragment.remove());
+                    }
+                }
+                requestAnimationFrame(renderInfall);
+            }
+
+            window.addEventListener('drop', (event) => {
+                event.preventDefault();
+                if (!dragState) return;
+                beginCapture(performance.now());
+                ensureDragLoop();
+            });
+
+            function showRecycleFeedback(message, color) {
+                const feedback = document.createElement('div');
+                feedback.className = 'recycle-feedback';
+                feedback.style.color = color;
+                feedback.textContent = message;
+                infallLayer.appendChild(feedback);
+                window.setTimeout(() => feedback.remove(), 1550);
+            }
+
+            window.blackHoleHost?.onInfall(({ names, clientX, clientY }) => {
+                const hasPreviewCapture = Boolean(dragState);
+                if (dragState) {
+                    beginCapture(performance.now());
+                    ensureDragLoop();
+                }
+                names.slice(hasPreviewCapture ? 1 : 0).forEach((name, index) => {
+                    animateInfall(
+                        { name },
+                        index,
+                        (clientX || canvas.clientWidth / 2) + index * 12,
+                        (clientY || canvas.clientHeight / 2) + index * 9,
+                    );
+                });
+            });
+            window.blackHoleHost?.onRecycled((name) => {
+                showRecycleFeedback(`已回收 ${name}`, '#fff6df');
+            });
+            window.blackHoleHost?.onRecycleFailed((name) => {
+                showRecycleFeedback(`无法回收 ${name}`, '#ffd7d0');
+            });
+        }
+
+        // 启动主函数
+        setupInnerHalo();
+        setupDesktopInteractions();
+        window.onload = main;
+    </script>
+</body>
+</html>

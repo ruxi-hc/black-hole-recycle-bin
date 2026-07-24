@@ -1,0 +1,16 @@
+{
+  "name": "gargantua-recycle-bin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A real-time Gargantua-style desktop recycle bin.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "npm run pack:win",
+    "pack:win": "electron-packager . \"Black Hole Recycle Bin\" --platform=win32 --arch=x64 --out=dist --asar"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.0.4",
+    "electron": "43.2.0"
+  }
+}
