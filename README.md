@@ -1,7 +1,7 @@
 # Black Hole Recycle Bin
 
 一个以 Gargantua 黑洞为灵感的 Windows 桌面回收站。它使用 Electron 与 WebGL 呈现倾斜吸积盘、引力透镜、旋转光环与粒子流，并把拖入的文件送入 Windows 系统回收站。
-
+## 黑洞回收站
 ## 效果演示
 
 <video controls muted playsinline poster="./assets/black-hole-recycle-bin-demo.jpg">
