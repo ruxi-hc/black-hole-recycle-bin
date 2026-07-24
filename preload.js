@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld("blackHoleHost", {
   moveWindow: (point) => ipcRenderer.send("window-drag-move", point),
   endWindowDrag: () => ipcRenderer.send("window-drag-end"),
   onInfall: (callback) => ipcRenderer.on("begin-infall", (_event, payload) => callback(payload)),
+  completeInfall: (id) => ipcRenderer.send("infall-complete", id),
   onRecycled: (callback) => ipcRenderer.on("recycle-complete", (_event, name) => callback(name)),
   onRecycleFailed: (callback) => ipcRenderer.on("recycle-failed", (_event, name) => callback(name)),
 });
